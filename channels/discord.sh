@@ -37,11 +37,34 @@ _discord_api() {
         "$@" "$url" 2>/dev/null)"
       ;;
     POST)
-      response="$(curl -sS --max-time 30 \
-        -X POST \
-        -H "Authorization: Bot ${token}" \
-        -H "Content-Type: application/json" \
-        "$@" "$url" 2>/dev/null)"
+      # Write POST data to temp file to avoid Git Bash encoding issues with -d
+      local _post_tmpfile
+      _post_tmpfile="$(mktemp "${TMPDIR:-/tmp}/bashclaw_post.XXXXXX")"
+      # Extract -d argument from "$@" and write to file
+      local _post_args=()
+      local _post_data=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          -d) _post_data="$2"; shift 2 ;;
+          *)  _post_args+=("$1"); shift ;;
+        esac
+      done
+      if [[ -n "$_post_data" ]]; then
+        printf '%s' "$_post_data" > "$_post_tmpfile"
+        response="$(curl -sS --max-time 30 \
+          -X POST \
+          -H "Authorization: Bot ${token}" \
+          -H "Content-Type: application/json" \
+          -d @"$_post_tmpfile" \
+          "${_post_args[@]}" "$url" 2>/dev/null)"
+      else
+        response="$(curl -sS --max-time 30 \
+          -X POST \
+          -H "Authorization: Bot ${token}" \
+          -H "Content-Type: application/json" \
+          "${_post_args[@]}" "$url" 2>/dev/null)"
+      fi
+      rm -f "$_post_tmpfile"
       ;;
     *)
       log_error "Discord API: unsupported method $method"
