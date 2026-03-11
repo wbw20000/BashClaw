@@ -446,8 +446,13 @@ _handle_chat() {
     return
   fi
 
+  # Use message queue if available to prevent concurrent --resume conflicts
   local response
-  response="$(engine_run "$agent_id" "$message" "$channel" "$sender" 2>/dev/null)"
+  if declare -f mq_dispatch &>/dev/null; then
+    response="$(mq_dispatch "$agent_id" "$message" "$channel" "$sender" "" 2>/dev/null)"
+  else
+    response="$(engine_run "$agent_id" "$message" "$channel" "$sender" 2>/dev/null)"
+  fi
 
   if [[ -n "$response" ]]; then
     local json
@@ -455,7 +460,12 @@ _handle_chat() {
       '{response: $r, agent: $a}')"
     _http_respond_json 200 "$json"
   else
-    _http_respond_json 500 '{"error":"agent returned empty response"}'
+    # Check if message was queued (empty response is expected)
+    if declare -f mq_is_active &>/dev/null && mq_is_active "${agent_id}:${channel}:${sender}" 2>/dev/null; then
+      _http_respond_json 202 '{"status":"queued","message":"正在处理上一条请求，稍后一起回复。"}'
+    else
+      _http_respond_json 500 '{"error":"agent returned empty response"}'
+    fi
   fi
 }
 

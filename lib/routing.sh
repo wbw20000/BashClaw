@@ -638,10 +638,22 @@ routing_dispatch() {
   local delivery_plan
   delivery_plan="$(routing_build_delivery_plan "$channel" "$sender" "$thread_id" "$message_id" "$account_id")"
 
+  # Use message queue to prevent concurrent --resume on same session.
+  # If session busy → queue message + notify user + drain after completion.
+  # If idle → run engine directly + drain any pending messages.
   local response
-  response="$(engine_run "$agent_id" "$message" "$channel" "$sender")"
+  if declare -f mq_dispatch &>/dev/null; then
+    response="$(mq_dispatch "$agent_id" "$message" "$channel" "$sender" "$delivery_plan")"
+  else
+    # Fallback if message_queue.sh not loaded
+    response="$(engine_run "$agent_id" "$message" "$channel" "$sender")"
+  fi
 
   if [[ -z "$response" ]]; then
+    # Empty is normal when message was queued — mq_dispatch handles delivery later
+    if declare -f mq_is_active &>/dev/null && mq_is_active "${agent_id}:${channel}:${sender}" 2>/dev/null; then
+      return 0
+    fi
     log_warn "Agent returned empty response"
     printf ''
     return 1
