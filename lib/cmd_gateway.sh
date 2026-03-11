@@ -78,8 +78,10 @@ gateway_start() {
     gateway_run_socat
   elif is_command_available nc; then
     gateway_run_nc
+  elif is_command_available ncat; then
+    gateway_run_ncat
   else
-    log_warn "No HTTP server available (need socat or nc)"
+    log_warn "No HTTP server available (need socat, nc, or ncat)"
     log_warn "Gateway is running but cannot serve HTTP."
     log_warn "CLI and channel listeners will still work."
     while [[ "$GATEWAY_RUNNING" == "true" ]]; do
@@ -224,6 +226,30 @@ gateway_run_nc() {
     }
 
     nc $nc_args "$GATEWAY_PORT" < "$fifo_path" | \
+      bash "$handler_script" > "$fifo_path" 2>/dev/null || true
+  done
+
+  rm -f "$fifo_path"
+}
+
+gateway_run_ncat() {
+  local handler_script
+  handler_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/gateway/http_handler.sh"
+
+  local fifo_path="${BASHCLAW_STATE_DIR:?}/gateway.fifo"
+
+  log_info "Starting HTTP server via ncat + FIFO on port $GATEWAY_PORT"
+  log_warn "ncat handles one request at a time. Install socat for concurrent connections."
+
+  while [[ "$GATEWAY_RUNNING" == "true" ]]; do
+    rm -f "$fifo_path"
+    mkfifo "$fifo_path" 2>/dev/null || {
+      log_error "Failed to create FIFO at $fifo_path"
+      sleep 1
+      continue
+    }
+
+    ncat -l "$GATEWAY_PORT" < "$fifo_path" | \
       bash "$handler_script" > "$fifo_path" 2>/dev/null || true
   done
 
@@ -429,7 +455,7 @@ gateway_health_monitor() {
     local disk_usage
     disk_usage="$(df -h "${BASHCLAW_STATE_DIR}" | tail -1 | awk '{print $5}' | tr -d '%')"
 
-    if [[ -n "$disk_usage" ]] && (( disk_usage > 90 )); then
+    if [[ -n "$disk_usage" ]] && (( disk_usage > 98 )); then
       log_warn "Disk usage is ${disk_usage}% - consider cleaning up state directory"
     fi
 

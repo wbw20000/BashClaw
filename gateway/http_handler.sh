@@ -96,7 +96,8 @@ _http_respond() {
     *) status_text="Unknown" ;;
   esac
 
-  local body_length="${#body}"
+  local body_length
+  body_length="$(printf '%s' "$body" | wc -c)"
 
   printf 'HTTP/1.1 %s %s\r\n' "$status" "$status_text"
   printf 'Content-Type: %s\r\n' "$content_type"

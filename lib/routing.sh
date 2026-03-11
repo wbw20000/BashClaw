@@ -250,6 +250,13 @@ routing_check_mention_gating() {
     bot_name="$(config_get '.agents.defaults.name' 'bashclaw')"
   fi
 
+  # Check Discord mention format: <@BOT_ID>
+  local bot_id
+  bot_id="$(config_channel_get "$channel" "botId" "")"
+  if [[ -n "$bot_id" && "$message" == *"<@${bot_id}>"* ]]; then
+    return 0
+  fi
+
   local lower_msg lower_name
   lower_msg="$(printf '%s' "$message" | tr '[:upper:]' '[:lower:]')"
   lower_name="$(printf '%s' "$bot_name" | tr '[:upper:]' '[:lower:]')"

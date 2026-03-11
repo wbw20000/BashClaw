@@ -245,7 +245,9 @@ channel_discord_start() {
 
       local messages
       messages="$(_discord_api GET "/channels/${chan_id}/messages${query_params}" 2>/dev/null)"
-      if [[ $? -ne 0 || -z "$messages" ]]; then
+      local api_exit=$?
+      if [[ $api_exit -ne 0 || -z "$messages" ]]; then
+        log_debug "Discord poll failed: channel=$chan_id exit=$api_exit empty=$([[ -z "$messages" ]] && echo yes || echo no)"
         c=$((c + 1))
         continue
       fi
@@ -286,8 +288,16 @@ channel_discord_start() {
         log_info "Discord message: channel=$chan_id author=$author_id"
         log_debug "Discord text: ${content:0:100}"
 
+        # Check if this channel is a DM-like channel (no mention required)
+        local is_group="true"
+        local dm_channels
+        dm_channels="$(config_get_raw '.channels.discord.dmChannels // []' 2>/dev/null)"
+        if printf '%s' "$dm_channels" | jq -e --arg cid "$chan_id" 'any(. == $cid)' >/dev/null 2>&1; then
+          is_group="false"
+        fi
+
         local reply
-        reply="$(routing_dispatch "discord" "$author_id" "$content" "true")"
+        reply="$(routing_dispatch "discord" "$author_id" "$content" "$is_group")"
         if [[ -n "$reply" ]]; then
           channel_discord_reply "$chan_id" "$msg_id" "$reply" || true
         fi
