@@ -4,7 +4,7 @@
 # BashClaw-specific tools are accessed via `bashclaw tool <name> --flag value` through
 # Claude CLI's native Bash tool. Hooks are bridged via `--settings` JSON.
 
-ENGINE_CLAUDE_TIMEOUT="${ENGINE_CLAUDE_TIMEOUT:-120}"
+# Timeout removed: let Claude CLI run to completion, typing indicator shows progress
 
 # Stub for end hook (not yet implemented in BashClaw)
 _engine_claude_fire_end_hook() { :; }
@@ -191,12 +191,7 @@ engine_claude_run() {
   local max_turns
   max_turns="$(config_agent_get "$agent_id" "maxTurns" "50")"
 
-  # Read timeout from config (overrides env default)
-  local cfg_timeout
-  cfg_timeout="$(config_agent_get "$agent_id" "engineTimeout" "")"
-  if [[ -n "$cfg_timeout" ]]; then
-    ENGINE_CLAUDE_TIMEOUT="$cfg_timeout"
-  fi
+  # (timeout removed - Claude CLI runs to completion)
 
   # Build CLI arguments
   local args=()
@@ -304,31 +299,13 @@ ${message}"
    exit $?) &
   local claude_pid=$!
 
-  # Wait with timeout
-  local waited=0 timed_out=false
-  while kill -0 "$claude_pid" 2>/dev/null; do
-    if (( waited >= ENGINE_CLAUDE_TIMEOUT )); then
-      kill "$claude_pid" 2>/dev/null || true
-      wait "$claude_pid" 2>/dev/null || true
-      log_error "Claude CLI timed out after ${ENGINE_CLAUDE_TIMEOUT}s"
-      timed_out=true
-      rm -f "$response_file" "$error_file" "$settings_file"
-      break
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
+  # Wait for Claude CLI to finish (no timeout)
+  local exit_code=0
+  wait "$claude_pid" 2>/dev/null || exit_code=$?
 
   local final_text="" new_session_id="" total_cost="" num_turns="" is_error=""
 
-  if [[ "$timed_out" == "true" ]]; then
-    # Timeout: skip JSON parsing, go straight to summary fallback
-    log_info "engine_claude: timed out, will attempt summary fallback"
-  else
-    local exit_code=0
-    wait "$claude_pid" 2>/dev/null || exit_code=$?
-
-    if [[ -s "$error_file" ]]; then
+  if [[ -s "$error_file" ]]; then
       local err_content
       err_content="$(cat "$error_file" 2>/dev/null)"
       log_warn "Claude CLI stderr: ${err_content:0:500}"
@@ -360,101 +337,44 @@ ${message}"
          claude --dangerously-skip-permissions -p "$full_message" "${retry_args[@]}" < /dev/null > "$response_file" 2>"$error_file"
          exit $?) &
         claude_pid=$!
-        waited=0
-        while kill -0 "$claude_pid" 2>/dev/null; do
-          if (( waited >= ENGINE_CLAUDE_TIMEOUT )); then
-            kill "$claude_pid" 2>/dev/null || true
-            wait "$claude_pid" 2>/dev/null || true
-            timed_out=true; break
-          fi
-          sleep 1; waited=$((waited + 1))
-        done
-        if [[ "$timed_out" != "true" ]]; then
-          wait "$claude_pid" 2>/dev/null || exit_code=$?
+        wait "$claude_pid" 2>/dev/null || exit_code=$?
+        # Log retry stderr if present
+        if [[ -s "$error_file" ]]; then
+          local retry_err
+          retry_err="$(cat "$error_file" 2>/dev/null)"
+          log_warn "Claude CLI retry stderr: ${retry_err:0:500}"
         fi
         rm -f "$error_file" "$settings_file"
       fi
+  fi
+  rm -f "$error_file" "$settings_file" 2>/dev/null
+
+  # Parse JSON result
+  local response
+  response="$(cat "$response_file" 2>/dev/null)"
+  rm -f "$response_file"
+
+  if [[ -n "$response" ]] && printf '%s' "$response" | jq empty 2>/dev/null; then
+    final_text="$(printf '%s' "$response" | jq -r '.result // empty' 2>/dev/null)"
+    new_session_id="$(printf '%s' "$response" | jq -r '.session_id // empty' 2>/dev/null)"
+    total_cost="$(printf '%s' "$response" | jq -r '.total_cost_usd // empty' 2>/dev/null)"
+    num_turns="$(printf '%s' "$response" | jq -r '.num_turns // empty' 2>/dev/null)"
+    is_error="$(printf '%s' "$response" | jq -r '.is_error // false' 2>/dev/null)"
+
+    if [[ "$is_error" == "true" ]]; then
+      log_error "Claude CLI error: ${final_text:0:500}"
     fi
-    rm -f "$error_file" "$settings_file" 2>/dev/null
-
-    # Parse JSON result
-    local response
-    response="$(cat "$response_file" 2>/dev/null)"
-    rm -f "$response_file"
-
-    if [[ -n "$response" ]] && printf '%s' "$response" | jq empty 2>/dev/null; then
-      final_text="$(printf '%s' "$response" | jq -r '.result // empty' 2>/dev/null)"
-      new_session_id="$(printf '%s' "$response" | jq -r '.session_id // empty' 2>/dev/null)"
-      total_cost="$(printf '%s' "$response" | jq -r '.total_cost_usd // empty' 2>/dev/null)"
-      num_turns="$(printf '%s' "$response" | jq -r '.num_turns // empty' 2>/dev/null)"
-      is_error="$(printf '%s' "$response" | jq -r '.is_error // false' 2>/dev/null)"
-
-      if [[ "$is_error" == "true" ]]; then
-        log_error "Claude CLI error: ${final_text:0:500}"
-      fi
-    elif [[ -z "$response" ]]; then
-      log_error "Claude CLI returned empty output (exit=$exit_code)"
-    else
-      log_error "Claude CLI returned invalid JSON"
-      log_debug "Claude CLI raw output: ${response:0:500}"
-    fi
+  elif [[ -z "$response" ]]; then
+    log_error "Claude CLI returned empty output (exit=$exit_code)"
+  else
+    log_error "Claude CLI returned invalid JSON"
+    log_debug "Claude CLI raw output: ${response:0:500}"
   fi
 
-  # Summary fallback: when Claude timed out or used tools but produced no text,
-  # send a fresh call with --max-turns 1 to force a text-only response.
+  # If no response, return error
   if [[ -z "$final_text" && "$is_error" != "true" ]]; then
-    local need_summary=false
-    if [[ "$timed_out" == "true" ]]; then
-      need_summary=true
-      log_info "engine_claude: timed out after ${ENGINE_CLAUDE_TIMEOUT}s, requesting text-only summary"
-    elif [[ -n "$num_turns" && "$num_turns" -gt 0 ]]; then
-      need_summary=true
-      log_info "engine_claude: result empty after $num_turns turns, requesting text-only summary"
-    fi
-
-    if [[ "$need_summary" == "true" ]]; then
-      local summary_prompt="The user asked: ${message}
-
-You were working on this task but ran out of time (the process was stopped after ${ENGINE_CLAUDE_TIMEOUT} seconds). Please provide a helpful text response to the user. Do NOT use any tools — respond with text only. Explain what you would need to do to complete this task, what information you need, and suggest concrete next steps. Respond in Chinese if the user's message is in Chinese."
-
-      local summary_resp_file summary_err_file
-      summary_resp_file="$(tmpfile "claude_summary")"
-      summary_err_file="$(tmpfile "claude_summary_err")"
-      (unset CLAUDECODE; export BASHCLAW_STATE_DIR BASHCLAW_CONFIG LOG_LEVEL CLAUDE_CODE_ENTRYPOINT="bashclaw" http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-       cd "$_cc_workdir"
-       claude -p "$summary_prompt" \
-         --max-turns 1 --output-format json \
-         < /dev/null > "$summary_resp_file" 2>"$summary_err_file"
-       exit $?) &
-      local summary_pid=$!
-      local sw=0
-      while kill -0 "$summary_pid" 2>/dev/null; do
-        if (( sw >= 60 )); then
-          kill "$summary_pid" 2>/dev/null || true
-          break
-        fi
-        sleep 1
-        sw=$((sw + 1))
-      done
-      wait "$summary_pid" 2>/dev/null || true
-      local summary_response
-      summary_response="$(cat "$summary_resp_file" 2>/dev/null)"
-      rm -f "$summary_resp_file" "$summary_err_file"
-      if [[ -n "$summary_response" ]]; then
-        local summary_text
-        summary_text="$(printf '%s' "$summary_response" | jq -r '.result // empty' 2>/dev/null)"
-        if [[ -n "$summary_text" ]]; then
-          final_text="$summary_text"
-          log_info "engine_claude: got summary response (${#summary_text} chars)"
-        fi
-      fi
-    fi
-
-    # If still no response after summary fallback, return error
-    if [[ -z "$final_text" ]]; then
-      _engine_claude_fire_end_hook "$agent_id" "$channel" "" ""
-      return 1
-    fi
+    _engine_claude_fire_end_hook "$agent_id" "$channel" "" ""
+    return 1
   fi
 
   if [[ -n "$new_session_id" ]]; then
