@@ -179,6 +179,14 @@ mq_dispatch() {
   # Lock acquired → we are the active runner
   log_debug "mq: lock acquired for $session_key"
 
+  # Ensure lock is released even if engine_run crashes
+  _mq_release_lock() {
+    flock -u 9 2>/dev/null
+    exec 9>&- 2>/dev/null
+    log_debug "mq: lock released for $session_key"
+  }
+  trap '_mq_release_lock' RETURN
+
   local response
   response="$(engine_run "$agent_id" "$message" "$channel" "$sender")"
 
@@ -206,11 +214,6 @@ mq_dispatch() {
       routing_deliver "$delivery_plan" "$formatted" >/dev/null 2>&1 || true
     fi
   done
-
-  # Release lock
-  flock -u 9
-  exec 9>&-
-  log_debug "mq: lock released for $session_key"
 
   printf '%s' "$response"
 }
