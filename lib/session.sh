@@ -383,6 +383,11 @@ session_check_idle_reset() {
 
   if (( diff_minutes >= idle_minutes )); then
     session_clear "$file"
+    # Also clear cc_session_id so engine starts fresh (avoids resuming a huge stale session)
+    local meta_file="${file%.jsonl}.meta.json"
+    if [[ -f "$meta_file" ]]; then
+      session_meta_update "$meta_file" "cc_session_id" '""'
+    fi
     log_info "Session idle-reset after ${diff_minutes}m: $file"
     # Fire session_end hook event
     if declare -f hooks_run &>/dev/null; then

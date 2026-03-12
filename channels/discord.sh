@@ -297,7 +297,7 @@ channel_discord_start() {
         fi
 
         local reply
-        reply="$(routing_dispatch "discord" "$author_id" "$content" "$is_group")"
+        reply="$(routing_dispatch "discord" "$author_id" "$content" "$is_group")" || true
         if [[ -n "$reply" ]]; then
           channel_discord_reply "$chan_id" "$msg_id" "$reply" || true
         fi

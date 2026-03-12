@@ -301,6 +301,11 @@ gateway_start_channels() {
 
     log_info "Starting channel: $ch_name"
     (
+      # Disable errexit in channel subshells — long-running listeners must
+      # survive transient errors (network failures, empty engine responses).
+      # The parent's set -euo pipefail is inherited but ERR traps are NOT,
+      # so any non-zero exit silently kills the channel without logging.
+      set +e
       source "$ch_script"
       local start_func="channel_${ch_name}_start"
       if declare -f "$start_func" &>/dev/null; then

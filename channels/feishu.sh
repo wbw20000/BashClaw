@@ -342,7 +342,7 @@ channel_feishu_start() {
           log_info "Feishu message: chat=$chat_id sender=$sender_id"
 
           local reply
-          reply="$(routing_dispatch "feishu" "$sender_id" "$content" "true")"
+          reply="$(routing_dispatch "feishu" "$sender_id" "$content" "true")" || true
           if [[ -n "$reply" ]]; then
             channel_feishu_send "$chat_id" "$reply" || true
           fi

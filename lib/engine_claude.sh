@@ -9,6 +9,47 @@
 # Stub for end hook (not yet implemented in BashClaw)
 _engine_claude_fire_end_hook() { :; }
 
+# Parse stream-json events in background, write status to file for feedback processes
+_engine_claude_parse_stream() {
+  local response_file="$1"
+  local status_file="$2"
+  local processed=0
+
+  while true; do
+    if [[ -f "$response_file" ]]; then
+      local line_num=0
+      while IFS= read -r line; do
+        line_num=$((line_num + 1))
+        (( line_num <= processed )) && continue
+        processed=$line_num
+        [[ -z "$line" ]] && continue
+
+        local etype
+        etype="$(printf '%s' "$line" | jq -r '.type // empty' 2>/dev/null)" || continue
+        case "$etype" in
+          assistant)
+            local subtype
+            subtype="$(printf '%s' "$line" | jq -r '.message.content[0].type // empty' 2>/dev/null)"
+            if [[ "$subtype" == "tool_use" ]]; then
+              local tool_name tool_detail
+              tool_name="$(printf '%s' "$line" | jq -r '.message.content[0].name // empty' 2>/dev/null)"
+              tool_detail="$(printf '%s' "$line" | jq -r '(.message.content[0].input.command // .message.content[0].input.file_path // "") | tostring | .[0:80]' 2>/dev/null)"
+              jq -nc --arg t "$tool_name" --arg d "$tool_detail" '{action:"tool",tool:$t,detail:$d}' > "$status_file" 2>/dev/null
+            elif [[ "$subtype" == "text" ]]; then
+              printf '{"action":"text"}\n' > "$status_file" 2>/dev/null
+            fi
+            ;;
+          result)
+            printf '{"action":"done"}\n' > "$status_file" 2>/dev/null
+            return 0
+            ;;
+        esac
+      done < "$response_file"
+    fi
+    sleep 1
+  done
+}
+
 # BashClaw tools that map to Claude CLI native tools (no bridge needed)
 _ENGINE_CLAUDE_NATIVE_TOOLS="web_fetch web_search shell read_file write_file list_files file_search"
 # BashClaw tools accessed via `bashclaw tool` CLI
@@ -195,7 +236,7 @@ engine_claude_run() {
 
   # Build CLI arguments
   local args=()
-  args+=(--output-format json)
+  args+=(--output-format stream-json --verbose)
   if [[ -n "$model" ]]; then
     args+=(--model "$model")
   fi
@@ -293,15 +334,26 @@ ${message}"
   # (needed for --resume). Redirect stdin from /dev/null to avoid EISDIR errors.
   local _cc_workdir="${BASHCLAW_STATE_DIR:-.}/claude-workdir"
   mkdir -p "$_cc_workdir" 2>/dev/null
-  (unset CLAUDECODE; export BASHCLAW_STATE_DIR BASHCLAW_CONFIG LOG_LEVEL CLAUDE_CODE_ENTRYPOINT="bashclaw" http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+
+  # Status file for real-time feedback (e.g., Telegram typing indicator with tool details)
+  local status_file="${BASHCLAW_STATE_DIR:-.}/engine_status_${agent_id}_${channel}_${sender}"
+  rm -f "$status_file" 2>/dev/null
+
+  (exec 9>&- 2>/dev/null  # Close inherited flock fd to prevent lock leak
+   unset CLAUDECODE; export BASHCLAW_STATE_DIR BASHCLAW_CONFIG LOG_LEVEL CLAUDE_CODE_ENTRYPOINT="bashclaw" http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
    cd "$_cc_workdir"
    claude --dangerously-skip-permissions -p "$full_message" "${args[@]}" < /dev/null > "$response_file" 2>"$error_file"
    exit $?) &
   local claude_pid=$!
 
+  # Background parser: extract stream events → status file for feedback processes
+  _engine_claude_parse_stream "$response_file" "$status_file" &
+  local parser_pid=$!
+
   # Wait for Claude CLI to finish (no timeout)
   local exit_code=0
   wait "$claude_pid" 2>/dev/null || exit_code=$?
+  kill "$parser_pid" 2>/dev/null; wait "$parser_pid" 2>/dev/null
 
   local final_text="" new_session_id="" total_cost="" num_turns="" is_error=""
 
@@ -332,12 +384,17 @@ ${message}"
 
         response_file="$(tmpfile "claude_engine")"
         error_file="$(tmpfile "claude_engine_err")"
-        (unset CLAUDECODE; export BASHCLAW_STATE_DIR BASHCLAW_CONFIG LOG_LEVEL CLAUDE_CODE_ENTRYPOINT="bashclaw" http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+        rm -f "$status_file" 2>/dev/null
+        (exec 9>&- 2>/dev/null  # Close inherited flock fd
+         unset CLAUDECODE; export BASHCLAW_STATE_DIR BASHCLAW_CONFIG LOG_LEVEL CLAUDE_CODE_ENTRYPOINT="bashclaw" http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
          cd "$_cc_workdir"
          claude --dangerously-skip-permissions -p "$full_message" "${retry_args[@]}" < /dev/null > "$response_file" 2>"$error_file"
          exit $?) &
         claude_pid=$!
+        _engine_claude_parse_stream "$response_file" "$status_file" &
+        parser_pid=$!
         wait "$claude_pid" 2>/dev/null || exit_code=$?
+        kill "$parser_pid" 2>/dev/null; wait "$parser_pid" 2>/dev/null
         # Log retry stderr if present
         if [[ -s "$error_file" ]]; then
           local retry_err
@@ -349,27 +406,54 @@ ${message}"
   fi
   rm -f "$error_file" "$settings_file" 2>/dev/null
 
-  # Parse JSON result
-  local response
-  response="$(cat "$response_file" 2>/dev/null)"
-  rm -f "$response_file"
+  # Parse stream-json: find type=result line (robust: grep, not tail -1)
+  local resp_lines result_line
+  resp_lines="$(wc -l < "$response_file" 2>/dev/null)" || resp_lines=0
+  result_line="$(grep -a '"type":"result"' "$response_file" 2>/dev/null | tail -1)"
+  if [[ -z "$result_line" ]]; then
+    # Try with spaces around colon (jq-formatted JSON)
+    result_line="$(grep -a '"type" *: *"result"' "$response_file" 2>/dev/null | tail -1)"
+  fi
+  log_info "engine_claude: stream ${resp_lines} lines, exit=$exit_code, has_result=$([[ -n "$result_line" ]] && echo yes || echo no)"
 
-  if [[ -n "$response" ]] && printf '%s' "$response" | jq empty 2>/dev/null; then
-    final_text="$(printf '%s' "$response" | jq -r '.result // empty' 2>/dev/null)"
-    new_session_id="$(printf '%s' "$response" | jq -r '.session_id // empty' 2>/dev/null)"
-    total_cost="$(printf '%s' "$response" | jq -r '.total_cost_usd // empty' 2>/dev/null)"
-    num_turns="$(printf '%s' "$response" | jq -r '.num_turns // empty' 2>/dev/null)"
-    is_error="$(printf '%s' "$response" | jq -r '.is_error // false' 2>/dev/null)"
+  if [[ -n "$result_line" ]]; then
+    final_text="$(printf '%s' "$result_line" | jq -r '.result // empty' 2>/dev/null)"
+    new_session_id="$(printf '%s' "$result_line" | jq -r '.session_id // empty' 2>/dev/null)"
+    total_cost="$(printf '%s' "$result_line" | jq -r '.cost_usd // .total_cost_usd // empty' 2>/dev/null)"
+    num_turns="$(printf '%s' "$result_line" | jq -r '.num_turns // empty' 2>/dev/null)"
+    is_error="$(printf '%s' "$result_line" | jq -r '.is_error // false' 2>/dev/null)"
 
     if [[ "$is_error" == "true" ]]; then
       log_error "Claude CLI error: ${final_text:0:500}"
     fi
-  elif [[ -z "$response" ]]; then
-    log_error "Claude CLI returned empty output (exit=$exit_code)"
-  else
-    log_error "Claude CLI returned invalid JSON"
-    log_debug "Claude CLI raw output: ${response:0:500}"
   fi
+
+  # Fallback: if no result line or empty result, extract last assistant text
+  if [[ -z "$final_text" && "$is_error" != "true" ]]; then
+    local last_assistant
+    last_assistant="$(grep -a '"type":"assistant"' "$response_file" 2>/dev/null | tail -1)"
+    if [[ -z "$last_assistant" ]]; then
+      last_assistant="$(grep -a '"type" *: *"assistant"' "$response_file" 2>/dev/null | tail -1)"
+    fi
+    if [[ -n "$last_assistant" ]]; then
+      final_text="$(printf '%s' "$last_assistant" | jq -r '[.message.content[] | select(.type=="text") | .text] | join("\n") // empty' 2>/dev/null)"
+      new_session_id="$(printf '%s' "$last_assistant" | jq -r '.session_id // empty' 2>/dev/null)"
+      if [[ -n "$final_text" ]]; then
+        log_warn "engine_claude: no result line, recovered from last assistant message"
+      fi
+    fi
+  fi
+
+  # Save debug file when parsing fails
+  if [[ -z "$final_text" && "$is_error" != "true" ]]; then
+    if (( resp_lines > 0 )); then
+      cp "$response_file" "/tmp/debug_stream_$(date +%s).jsonl" 2>/dev/null
+      log_error "engine_claude: empty result from ${resp_lines}-line stream (saved to /tmp/debug_stream_*.jsonl)"
+    else
+      log_error "Claude CLI returned empty output (exit=$exit_code)"
+    fi
+  fi
+  rm -f "$response_file"
 
   # If no response, return error
   if [[ -z "$final_text" && "$is_error" != "true" ]]; then
@@ -394,8 +478,8 @@ ${message}"
 
   # Usage tracking
   local input_tokens output_tokens
-  input_tokens="$(printf '%s' "$response" | jq -r '.usage.input_tokens // 0' 2>/dev/null)"
-  output_tokens="$(printf '%s' "$response" | jq -r '.usage.output_tokens // 0' 2>/dev/null)"
+  input_tokens="$(printf '%s' "$result_line" | jq -r '.usage.input_tokens // 0' 2>/dev/null)"
+  output_tokens="$(printf '%s' "$result_line" | jq -r '.usage.output_tokens // 0' 2>/dev/null)"
   if [[ "$input_tokens" == "null" ]]; then input_tokens=0; fi
   if [[ "$output_tokens" == "null" ]]; then output_tokens=0; fi
   if (( input_tokens > 0 || output_tokens > 0 )); then

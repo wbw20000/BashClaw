@@ -28,8 +28,8 @@ _telegram_api() {
 
   local url="${TELEGRAM_API}${token}/${method}"
   local response
-  response="$(curl -sS --max-time 60 "$@" "$url" 2>/dev/null)"
-  if [[ $? -ne 0 || -z "$response" ]]; then
+  response="$(curl -sS --max-time 60 "$@" "$url" 2>/dev/null)" || true
+  if [[ -z "$response" ]]; then
     log_error "Telegram API request failed: $method"
     return 1
   fi
@@ -53,6 +53,78 @@ _telegram_api_post() {
   _telegram_api "$method" \
     -H "Content-Type: application/json" \
     -d "$data"
+}
+
+# ---- Status Feedback Helpers ----
+
+# Edit a sent message (for real-time status updates)
+_telegram_edit_message() {
+  local chat_id="$1"
+  local message_id="$2"
+  local text="$3"
+  _telegram_api_post "editMessageText" \
+    "$(jq -nc --arg cid "$chat_id" --argjson mid "$message_id" --arg txt "$text" \
+      '{chat_id:$cid, message_id:$mid, text:$txt}')" >/dev/null 2>&1
+}
+
+# Real-time feedback loop: reads engine status file, updates Telegram with progress
+_telegram_feedback_loop() {
+  local chat_id="$1"
+  local msg_id="$2"
+  local status_file="$3"
+  local start_time last_action="" last_edit=0 max_wait=600
+  start_time=$(date +%s)
+  exec 9>&- 2>/dev/null  # Close inherited flock fd
+
+  while true; do
+    local now elapsed
+    now=$(date +%s)
+    elapsed=$(( now - start_time ))
+
+    # Timeout protection (10 min)
+    if (( elapsed >= max_wait )); then
+      _telegram_edit_message "$chat_id" "$msg_id" "⚠️ 处理超时（${max_wait}s），请重试" || true
+      break
+    fi
+
+    # Refresh typing indicator (expires every 5s)
+    _telegram_api_post "sendChatAction" \
+      "$(jq -nc --arg cid "$chat_id" '{chat_id:$cid, action:"typing"}')" >/dev/null 2>&1 || true
+
+    # Read engine status file
+    local current_action=""
+    if [[ -f "$status_file" ]]; then
+      current_action="$(cat "$status_file" 2>/dev/null)"
+    fi
+
+    local action_type
+    action_type="$(printf '%s' "$current_action" | jq -r '.action // empty' 2>/dev/null)"
+
+    # Engine done
+    if [[ "$action_type" == "done" ]]; then break; fi
+
+    # Update status message on state change or every 15s
+    if [[ "$current_action" != "$last_action" ]] || (( elapsed - last_edit >= 15 )); then
+      local display_text="⏳ 处理中（${elapsed}s）"
+      case "$action_type" in
+        tool)
+          local tname tdetail
+          tname="$(printf '%s' "$current_action" | jq -r '.tool // ""' 2>/dev/null)"
+          tdetail="$(printf '%s' "$current_action" | jq -r '.detail // ""' 2>/dev/null)"
+          display_text="🔧 ${tname}: ${tdetail:0:60}（${elapsed}s）"
+          ;;
+        text)
+          display_text="📝 正在生成回复（${elapsed}s）"
+          ;;
+      esac
+
+      _telegram_edit_message "$chat_id" "$msg_id" "$display_text" || true
+      last_action="$current_action"
+      last_edit=$elapsed
+    fi
+
+    sleep 5
+  done
 }
 
 # ---- Public Functions ----
@@ -254,12 +326,41 @@ channel_telegram_start() {
       log_info "Telegram message: chat=$chat_id sender=$sender_id group=$is_group"
       log_debug "Telegram text: ${text:0:100}"
 
-      # Dispatch through routing pipeline
+      # Send immediate status placeholder
+      local status_msg_id
+      status_msg_id="$(channel_telegram_send "$chat_id" "⏳ 处理中...")" || true
+
+      # Start real-time feedback process (typing indicator + progress updates)
+      local status_file="${BASHCLAW_STATE_DIR:-.}/engine_status_main_telegram_${sender_id}"
+      local feedback_pid=""
+      if [[ -n "$status_msg_id" ]]; then
+        _telegram_feedback_loop "$chat_id" "$status_msg_id" "$status_file" &
+        feedback_pid=$!
+      fi
+
+      # Dispatch through routing pipeline (|| true: must not kill polling loop)
       local reply
-      reply="$(routing_dispatch "telegram" "$sender_id" "$text" "$is_group")"
+      reply="$(routing_dispatch "telegram" "$sender_id" "$text" "$is_group")" || true
+
+      # Stop feedback process
+      if [[ -n "$feedback_pid" ]]; then
+        kill "$feedback_pid" 2>/dev/null; wait "$feedback_pid" 2>/dev/null
+      fi
+
+      # Send result and update status message
       if [[ -n "$reply" ]]; then
         channel_telegram_send "$chat_id" "$reply" || true
+        if [[ -n "$status_msg_id" ]]; then
+          _telegram_edit_message "$chat_id" "$status_msg_id" "✅ 完成" || true
+        fi
+      else
+        if [[ -n "$status_msg_id" ]]; then
+          _telegram_edit_message "$chat_id" "$status_msg_id" "⚠️ 处理完成但无回复" || true
+        fi
       fi
+
+      # Clean up status file
+      rm -f "$status_file" 2>/dev/null
 
       i=$((i + 1))
     done

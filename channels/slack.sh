@@ -260,7 +260,7 @@ channel_slack_start() {
 
         # Dispatch through routing pipeline
         local reply
-        reply="$(routing_dispatch "slack" "$user" "$text" "true")"
+        reply="$(routing_dispatch "slack" "$user" "$text" "true")" || true
         if [[ -n "$reply" ]]; then
           channel_slack_reply "$chan_id" "$ts" "$reply" || true
         fi
