@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-015",
+  "decision_title": "部署时必须配置连接池大小和健康检查，防止连接耗尽",
+  "task_summary": "修复滚动部署期间数据库连接池耗尽导致服务不可用的问题",
+  "applicable_scope": "database connection pooling, rolling deployments, application scaling, connection lifecycle management",
+  "non_applicable_scope": "无状态的 serverless function（每次请求新建连接）, 客户端直连数据库的工具脚本",
+  "final_decision": "连接池配置公式：max_connections = (数据库最大连接数 - 预留连接数) / 最大实例数。部署期间实例数翻倍时连接总数不能超过数据库限制。同时启用连接健康检查（pool_pre_ping），回收空闲超时连接（pool_recycle=300s）",
+  "why": "滚动部署时新旧实例同时运行，每个实例持有 20 个连接。部署 3 个新实例时瞬间有 6 个实例（3 旧 + 3 新）同时运行，120 个连接超出 PostgreSQL 默认的 100 个连接限制。新实例启动失败，旧实例因连接断开也开始报错，导致全面服务中断",
+  "known_pitfalls": [
+    "PgBouncer 等连接池代理的 max_client_conn 和后端数据库的 max_connections 是两个不同的限制，需要分别配置",
+    "连接泄漏（未关闭的连接）会逐渐耗尽连接池——需要监控连接池的 active/idle 比例，设置告警阈值",
+    "K8s 的 preStop hook 应包含连接优雅关闭逻辑，否则旧 Pod 被 kill 时连接不会被正确释放，数据库侧会保持 TIME_WAIT 状态"
+  ],
+  "validation_evidence": "配置调整后在 staging 模拟滚动部署（6 实例并存），数据库连接数峰值 90/100，无连接拒绝错误",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["deployment", "database", "connection-pool", "availability"],
+  "changeType": "config_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

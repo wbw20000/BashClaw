@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-025",
+  "decision_title": "生产部署必须使用 lock 文件固定完整依赖树版本",
+  "task_summary": "从 requirements.txt 宽松版本约束迁移到 pip-compile 生成的完整 lock 文件",
+  "applicable_scope": "Python dependency management, production deployments, CI/CD pipelines, reproducible builds",
+  "non_applicable_scope": "库开发（库应该用宽松约束让下游灵活选择版本）, 一次性的数据分析脚本",
+  "final_decision": "项目维护两层依赖文件：requirements.in（直接依赖，宽松约束如 fastapi>=0.100）和 requirements.lock（pip-compile 生成的完整依赖树，含精确版本和 hash）。生产和 CI 环境只用 pip install -r requirements.lock --require-hashes。推荐迁移到 uv 或 poetry 获得更好的 lock 文件支持",
+  "why": "requirements.txt 中写 requests>=2.28 导致两次部署安装了不同的 requests 版本（2.28.1 vs 2.31.0）。requests 2.31.0 改变了 Session 的 SSL 验证默认行为，导致内部 API 调用因证书问题失败。团队花了 3 小时定位问题，因为本地环境（仍是 2.28.1）无法复现",
+  "known_pitfalls": [
+    "pip freeze 输出的是当前安装的版本，不是真正的 lock 文件——它不包含 hash 校验，也不区分直接依赖和传递依赖",
+    "传递依赖的版本同样需要锁定——A 依赖 B，B 依赖 C，如果只锁定 A 和 B 的版本，C 的版本仍可能变化",
+    "lock 文件需要定期更新（如每周或每月），否则积累的安全补丁无法应用——可以用 dependabot/renovate 自动化"
+  ],
+  "validation_evidence": "迁移到 lock 文件后连续 50 次部署安装的依赖版本完全一致（sha256 校验通过）。之前同一 requirements.txt 的 50 次部署中有 8 次安装了不同的传递依赖版本",
+  "issue_type": "regression_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["python", "dependency-management", "reproducibility", "deployment"],
+  "changeType": "config_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

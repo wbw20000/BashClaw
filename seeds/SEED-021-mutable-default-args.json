@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-021",
+  "decision_title": "Python 函数参数禁止使用可变默认值",
+  "task_summary": "修复因 list/dict 默认参数在函数调用间共享状态导致的数据污染 bug",
+  "applicable_scope": "Python function definitions, default parameter values, class __init__ methods",
+  "non_applicable_scope": "不可变默认值（None, int, str, tuple, frozenset）, 类变量（类变量共享是预期行为）",
+  "final_decision": "所有可变类型的默认参数必须用 None 替代，在函数体内通过 if arg is None: arg = [] 创建新实例。在 Ruff/flake8 中启用 B006（mutable-default-argument）检查",
+  "why": "def add_item(item, items=[]): items.append(item); return items。第一次调用 add_item('a') 返回 ['a']，第二次调用 add_item('b') 返回 ['a', 'b'] 而非 ['b']。因为默认值 [] 在函数定义时只创建一次，所有调用共享同一个 list 对象。这个 bug 在生产环境导致用户 A 的购物车出现用户 B 的商品",
+  "known_pitfalls": [
+    "dataclass 的 field(default_factory=list) 是正确做法，但直接写 field(default=[]) 会报错（Python 3.x 的保护机制）——attrs 和 pydantic 也有类似机制",
+    "dict.setdefault(key, []) 中的 [] 每次调用都创建新 list，这不是可变默认参数问题——但容易被混淆",
+    "函数装饰器中的可变默认参数同样受影响，且更难发现——因为装饰器函数通常只在模块加载时执行一次"
+  ],
+  "validation_evidence": "Ruff B006 规则扫描发现项目中 15 处可变默认参数，其中 2 处在 API handler 中导致了跨请求数据污染",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["python", "mutable-default", "data-corruption", "gotcha"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-007",
+  "decision_title": "异步测试必须设置显式超时，且超时值需区分 CI 和本地",
+  "task_summary": "修复异步测试因默认超时过短导致 CI 环境频繁 flaky 的问题",
+  "applicable_scope": "async/await tests, Promise-based tests, API integration tests, WebSocket tests",
+  "non_applicable_scope": "纯同步单元测试, 不涉及 I/O 的计算型测试",
+  "final_decision": "所有异步测试必须显式设置超时值。本地默认 5 秒，CI 环境通过环境变量 TEST_TIMEOUT_MS 设为 15 秒。超时后测试应输出当前等待的具体操作（如等待哪个 API 响应），而非仅报 timeout",
+  "why": "CI 环境的容器共享资源，I/O 延迟波动大。Jest 默认 5 秒超时在本地永远不会触发，但 CI 中约 8% 的异步测试会间歇性超时。团队每周花 2-3 小时重跑 flaky 测试",
+  "known_pitfalls": [
+    "Jest 的 done() 回调如果未被调用，测试会静默挂起直到超时——应优先使用 async/await 而非 done() 回调",
+    "超时值设太大会导致真正的死锁/挂起问题被掩盖——超过 30 秒的测试应审查是否存在设计问题",
+    "Vitest 和 Jest 的超时设置语法不同（Vitest 用 test.timeout，Jest 用第三个参数），迁移时容易遗漏"
+  ],
+  "validation_evidence": "调整超时配置后，CI flaky rate 从 8% 降至 0.3%，每周节省约 2 小时的重跑时间",
+  "issue_type": "regression_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["testing", "async", "flaky-test", "ci"],
+  "changeType": "config_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

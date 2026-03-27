@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-010",
+  "decision_title": "Snapshot 测试不能作为唯一的回归防线",
+  "task_summary": "规范 snapshot 测试使用策略，限制其适用范围，补充行为断言测试",
+  "applicable_scope": "UI component snapshot tests, API response schema tests, serialization output tests",
+  "non_applicable_scope": "配置文件变更检测（适合用 snapshot）, 生成代码的 golden file 测试",
+  "final_decision": "Snapshot 测试仅用于检测意外变更（作为提醒），不作为正确性验证手段。每个有 snapshot 的组件必须同时有至少一个行为断言测试。Snapshot 更新（--update-snapshot）必须在 PR review 中逐个确认差异",
+  "why": "团队发现 snapshot 更新成了条件反射：CI 报 snapshot 不匹配 → 开发者立刻 --update-snapshot → PR 中几百行 snapshot diff 被 rubber stamp 通过。一个按钮的 onClick handler 被误删，snapshot 更新后没人注意到，上线后该功能完全失效",
+  "known_pitfalls": [
+    "大型 snapshot 文件（超过 100 行）几乎不可能在 code review 中被有效审查——应拆分为更小的、聚焦的 snapshot",
+    "snapshot 中包含动态值（时间戳、随机 ID）会导致每次都不匹配，开发者会习惯性更新而不检查",
+    "inline snapshot（toMatchInlineSnapshot）比文件 snapshot 更容易审查，但仍需配合行为测试"
+  ],
+  "validation_evidence": "审计后发现团队 47 个 snapshot 测试中有 12 个是唯一的测试覆盖（无行为断言），其中 3 个覆盖的功能已在之前的 snapshot 更新中被无声破坏",
+  "issue_type": "regression_risk",
+  "review_or_human_required": true,
+  "risk_tags": ["testing", "snapshot", "code-review", "false-confidence"],
+  "changeType": "process_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

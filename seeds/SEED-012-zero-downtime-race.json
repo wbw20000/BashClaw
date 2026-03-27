@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-012",
+  "decision_title": "零停机部署必须确保新旧代码能同时正确运行",
+  "task_summary": "建立零停机部署的兼容性检查清单，确保滚动更新期间新旧版本代码并存时不会出现数据不一致",
+  "applicable_scope": "rolling deployments, blue-green deployments, canary releases, API schema changes",
+  "non_applicable_scope": "维护窗口内的停机部署, 单实例开发/测试环境",
+  "final_decision": "所有涉及数据格式、API 契约、消息队列格式变更的部署，必须采用两阶段发布：第一阶段部署兼容新旧格式的代码（能读新写旧+新），第二阶段确认所有实例更新后再移除旧格式支持",
+  "why": "滚动部署期间，新版本实例开始写入新格式数据，但旧版本实例还在运行并尝试读取这些数据。旧版本无法解析新格式导致 500 错误。实际案例：用户配置字段从字符串改为 JSON 对象，新实例写入 JSON，旧实例用 string 方式读取并截断数据",
+  "known_pitfalls": [
+    "数据库列的重命名不能原子完成——必须分步：加新列 → 双写 → 迁移数据 → 读新列 → 删旧列，至少需要 3 次部署",
+    "消息队列中的消息可能在部署前产生，新版本消费者必须能处理旧格式消息——消息格式变更需要版本号字段",
+    "缓存中的旧格式数据在部署后仍会被读取——要么缓存 key 加版本前缀，要么新代码能解析两种格式"
+  ],
+  "validation_evidence": "在 staging 环境模拟滚动部署：先部署 1 个新版本实例 + 2 个旧版本实例混跑 10 分钟，检查错误率。用户配置变更场景下错误率为 0%",
+  "issue_type": "design_concern",
+  "review_or_human_required": true,
+  "risk_tags": ["deployment", "zero-downtime", "backward-compatibility", "data-format"],
+  "changeType": "process_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-013",
+  "decision_title": "应用启动时必须校验所有必需环境变量",
+  "task_summary": "添加启动时环境变量预检机制，缺少必需变量时 fast-fail 而非运行时才报错",
+  "applicable_scope": "application startup, configuration loading, new service deployment, environment provisioning",
+  "non_applicable_scope": "有合理默认值的可选配置项, 运行时动态获取的配置（如 feature flag）",
+  "final_decision": "应用入口点添加 env_check() 函数，在任何业务逻辑前校验所有必需环境变量是否存在且非空。缺少任何一个时打印清晰的错误信息（列出所有缺失变量名）并以非零状态码退出。同时维护 .env.example 文件作为必需变量清单",
+  "why": "新服务部署到 staging 后运行了 3 天才发现缺少 REDIS_URL 环境变量——因为用到 Redis 的代码路径只在特定场景触发。直到用户命中该路径时才 500 报错，且错误信息是 ConnectionRefusedError 而非缺少配置，排查花了 1 小时",
+  "known_pitfalls": [
+    "Docker Compose 的 env_file 不会报错缺失的变量，只是设为空字符串——空字符串和不存在是不同的，校验时需检查两种情况",
+    "K8s ConfigMap/Secret 引用不存在的 key 时，Pod 会卡在 CreateContainerConfigError 状态，但错误信息不够明确——需要在部署 manifest 中也做校验",
+    "环境变量名拼写错误（如 DATABSE_URL vs DATABASE_URL）不会被检测到——考虑用 pydantic-settings 或 envalid 做带类型的配置解析"
+  ],
+  "validation_evidence": "启动预检上线后，在下一次部署中立即发现 2 个缺失的环境变量（新增的第三方 API key），部署在 30 秒内失败并回滚，而非运行数天后才发现",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["deployment", "configuration", "env-vars", "fast-fail"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-008",
+  "decision_title": "测试 fixture 必须在每个测试用例间完全隔离",
+  "task_summary": "修复因共享 fixture 对象导致测试执行顺序影响结果的问题",
+  "applicable_scope": "test fixtures, test setup/teardown, shared test state, database seeding",
+  "non_applicable_scope": "只读的常量 fixture（如静态配置文件）, 不可变的测试数据",
+  "final_decision": "每个测试用例必须使用独立的 fixture 实例。禁止在 beforeAll/setUpClass 中创建可变 fixture 供多个测试共享。数据库 fixture 使用事务隔离（每个测试在独立事务中运行，结束后回滚）",
+  "why": "测试 A 修改了共享 fixture 中的用户对象状态，测试 B 依赖该用户的初始状态。单独运行 B 通过，但 A 在 B 之前运行时 B 就失败。这类 bug 极难定位，因为测试结果取决于执行顺序",
+  "known_pitfalls": [
+    "Python 中 list/dict 类型的 fixture 如果在 conftest.py 中定义为模块级别，所有测试共享同一个引用——必须用 fixture 工厂函数或 deepcopy",
+    "Jest 的 beforeAll 中的对象在所有 test 间共享引用，即使看起来像是每次 describe 重新创建",
+    "数据库 fixture 的事务隔离在使用 savepoint 时需注意嵌套事务的数据库支持情况"
+  ],
+  "validation_evidence": "启用 pytest-randomly 随机化测试执行顺序后，发现 12 个因 fixture 共享导致的顺序依赖 bug，修复后全部通过随机顺序测试",
+  "issue_type": "regression_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["testing", "fixture", "test-isolation", "flaky-test"],
+  "changeType": "test_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

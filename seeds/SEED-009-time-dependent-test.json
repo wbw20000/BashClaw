@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-009",
+  "decision_title": "测试中禁止直接调用系统时间，必须使用可控的时间源",
+  "task_summary": "重构依赖 Date.now() / datetime.now() 的测试，改用可注入的时钟抽象",
+  "applicable_scope": "time-dependent business logic tests, cron job tests, expiration/TTL tests, rate limiter tests",
+  "non_applicable_scope": "仅记录日志时间戳的代码, 不含时间判断逻辑的 CRUD 操作",
+  "final_decision": "业务代码中的时间获取统一通过 Clock 接口（Python 用 Protocol，TS 用 interface）。生产环境注入 SystemClock，测试中注入 FakeClock 可手动控制时间推进。禁止在测试中 monkey-patch Date 或 datetime 全局对象",
+  "why": "多个测试在月末、年末、闰年、夏令时切换日失败。例如：会员到期判断测试在 2 月 28 日后失败，因为 timedelta(days=30) 的结果跨月后日期不符合预期。直接 mock 系统时间会影响其他并行测试",
+  "known_pitfalls": [
+    "JavaScript 中 new Date() 和 Date.now() 是两个不同的时间获取路径，mock 一个不会影响另一个",
+    "Python 中 datetime.now() 和 time.time() 是独立的，freezegun 需要正确配置才能同时冻结两者",
+    "时区敏感的测试必须固定时区（如 UTC），否则不同开发者本地时区不同导致测试结果不一致"
+  ],
+  "validation_evidence": "使用 FakeClock 重写后，在模拟 2 月 28 日、12 月 31 日、夏令时切换日运行全部测试，100% 稳定通过",
+  "issue_type": "regression_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["testing", "time", "flaky-test", "determinism"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

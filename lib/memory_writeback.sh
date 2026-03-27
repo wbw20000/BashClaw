@@ -44,20 +44,18 @@ if [[ -f "${BASHCLAW_ROOT}/lib/audit_log.sh" ]]; then
   source "${BASHCLAW_ROOT}/lib/audit_log.sh"
 fi
 
+# SQLite store（本地优先存储）
+if [[ -f "${BASHCLAW_ROOT}/lib/store.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${BASHCLAW_ROOT}/lib/store.sh"
+fi
+
 # MCP 客户端（用于将知识同步回写到远程知识库）
 if [[ -f "${BASHCLAW_ROOT}/lib/mcp_client.sh" ]]; then
   # shellcheck source=/dev/null
   source "${BASHCLAW_ROOT}/lib/mcp_client.sh"
 fi
 
-# 轻量级事件日志适配器
-audit_log_event() {
-  local category="${1:-}" event="${2:-}" detail="${3:-}"
-  local log_dir="${AUDIT_LOG_DIR:-${BASHCLAW_ROOT}/.bashclaw/audit}"
-  mkdir -p "${log_dir}"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | ${category} | ${event} | ${detail}" \
-    >> "${log_dir}/events.log"
-}
 
 ###############################################################################
 # writeback_init — 初始化知识目录
@@ -207,6 +205,19 @@ writeback_create() {
   else
     # 简单方式：在 JSON 末尾添加 kb_id
     sed "s/^{/{\"kb_id\": \"${kb_id}\",/" "${input_file}" > "${kb_file}"
+  fi
+
+  # ── SQLite 回写：同步到本地 SQLite 存储（best-effort） ──────────
+  if type store_card_insert &>/dev/null && [[ -f "${BASHCLAW_DB:-}" ]]; then
+    local risk_tags_val issue_type_val
+    if command -v jq &>/dev/null; then
+      risk_tags_val=$(jq -c '.risk_tags // []' "${input_file}" 2>/dev/null) || risk_tags_val="[]"
+      issue_type_val=$(jq -r '.issue_type // ""' "${input_file}" 2>/dev/null) || issue_type_val=""
+    fi
+    store_card_insert "${title}" "${scope}" \
+      "$(jq -r '.final_decision // ""' "${input_file}" 2>/dev/null)" \
+      "$(jq -r '.why // ""' "${input_file}" 2>/dev/null)" \
+      "${risk_tags_val:-[]}" "${issue_type_val:-}" 2>/dev/null || true
   fi
 
   # 写入审计日志

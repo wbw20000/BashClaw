@@ -48,14 +48,6 @@ if [[ -f "${BASHCLAW_ROOT}/lib/audit_log.sh" ]]; then
   source "${BASHCLAW_ROOT}/lib/audit_log.sh"
 fi
 
-# 轻量级事件日志适配器
-audit_log_event() {
-  local category="${1:-}" event="${2:-}" detail="${3:-}"
-  local log_dir="${AUDIT_LOG_DIR:-${BASHCLAW_ROOT}/.bashclaw/audit}"
-  mkdir -p "${log_dir}"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | ${category} | ${event} | ${detail}" \
-    >> "${log_dir}/events.log"
-}
 
 # 高风险域关键词（与 bashclaw.json 中 risk_keywords 对齐）
 readonly HIGH_RISK_DOMAINS=("auth" "payment" "migration" "deploy" "permission" "billing" "schema" "prod")

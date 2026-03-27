@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+###############################################################################
+# BashClaw post-commit hook — Lightweight risk tagger
+# Tags each commit with risk level based on diff keywords.
+# Runs in <1s to avoid slowing down commits.
+###############################################################################
+
+BASHCLAW_ROOT="${BASHCLAW_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+export PATH="/c/sqlite:${PATH}"
+
+# Only run if BashClaw is initialized
+[[ -f "${BASHCLAW_ROOT}/.bashclaw/bashclaw.db" ]] || exit 0
+
+export BASHCLAW_DB="${BASHCLAW_ROOT}/.bashclaw/bashclaw.db"
+
+if [[ -f "${BASHCLAW_ROOT}/lib/hook_helpers.sh" ]]; then
+  source "${BASHCLAW_ROOT}/lib/hook_helpers.sh"
+else
+  exit 0
+fi
+
+# Get current commit hash
+COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null) || exit 0
+
+# Classify and tag
+RESULT=$(hook_classify_commit "${COMMIT_HASH}" 2>/dev/null) || exit 0
+RISK_LEVEL="${RESULT%%|*}"
+RISK_TAGS="${RESULT#*|}"
+
+hook_tag_commit "${COMMIT_HASH}" "${RISK_LEVEL}" "${RISK_TAGS}" 2>/dev/null || true
+
+if [[ "${RISK_LEVEL}" != "low" ]]; then
+  echo "[BashClaw] Commit tagged: risk=${RISK_LEVEL} tags=${RISK_TAGS}" >&2
+fi

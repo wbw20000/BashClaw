@@ -8,11 +8,16 @@ set -euo pipefail
 # Reference: 统一实施文档 第7节
 #
 # 检索策略（优先级）：
-#   1. MCP 语义检索（search_knowledge）—— 精度高，依赖 MCP Server
-#   2. 本地文件关键词匹配 —— 降级方案，无外部依赖
+#   1. SQLite FTS5 全文检索（本地优先） —— 最快，零外部依赖
+#   2. MCP 语义检索（search_knowledge）—— 精度高，依赖 MCP Server
+#   3. 本地文件关键词匹配 —— 最终降级方案
 
-# ── source MCP 客户端 ─────────────────────────────────────────────────
+# ── source dependencies ─────────────────────────────────────────────────
 BASHCLAW_ROOT="${BASHCLAW_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+if [[ -f "${BASHCLAW_ROOT}/lib/store.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${BASHCLAW_ROOT}/lib/store.sh"
+fi
 if [[ -f "${BASHCLAW_ROOT}/lib/mcp_client.sh" ]]; then
   # shellcheck source=/dev/null
   source "${BASHCLAW_ROOT}/lib/mcp_client.sh"
@@ -216,7 +221,7 @@ EOF
     "${user_request}" "${task_summary}" "${change_type}" \
     "${file_paths}" "${risk_tags}" "${error_stack}" "${tech_stack}")"
 
-  # ── 检索策略：MCP 优先，本地降级 ──────────────────────────────────
+  # ── 检索策略：SQLite 优先 → MCP → 本地文件降级 ──────────────────
   local hits="[]"
   local hit_count=0
   local known_pitfalls="[]"
@@ -224,17 +229,33 @@ EOF
   local non_applicable_scope="none"
   local retrieval_source="local"
 
-  # 读取 MCP 配置的 minSimilarity（默认 0.75）
+  # 读取配置
   local min_similarity="0.75"
   local retrieve_top_k="5"
+  local provider="local"
   if command -v jq &>/dev/null && [[ -f "${BASHCLAW_ROOT}/bashclaw.json" ]]; then
     min_similarity=$(jq -r '.knowledge.minSimilarity // 0.75' "${BASHCLAW_ROOT}/bashclaw.json" 2>/dev/null) || min_similarity="0.75"
     retrieve_top_k=$(jq -r '.knowledge.retrieveTopK // 5' "${BASHCLAW_ROOT}/bashclaw.json" 2>/dev/null) || retrieve_top_k="5"
+    provider=$(jq -r '.knowledge.provider // "local"' "${BASHCLAW_ROOT}/bashclaw.json" 2>/dev/null) || provider="local"
   fi
 
-  # 策略1：尝试 MCP 语义检索
+  # 策略0：SQLite FTS5 检索（本地优先）
+  local sqlite_succeeded=false
+  if [[ "${provider}" == "local" ]] && type store_card_search &>/dev/null && [[ -f "${BASHCLAW_DB:-}" ]]; then
+    local sqlite_raw=""
+    sqlite_raw=$(store_card_search "${query}" "${retrieve_top_k}" 2>/dev/null) || true
+
+    if [[ -n "${sqlite_raw}" && "${sqlite_raw}" != "[]" ]]; then
+      hits="${sqlite_raw}"
+      hit_count=$(echo "${sqlite_raw}" | jq 'length' 2>/dev/null) || hit_count=0
+      retrieval_source="sqlite"
+      sqlite_succeeded=true
+    fi
+  fi
+
+  # 策略1：SQLite 无结果时尝试 MCP 语义检索
   local mcp_succeeded=false
-  if type mcp_available &>/dev/null && mcp_available 2>/dev/null; then
+  if [[ "${sqlite_succeeded}" != "true" ]] && type mcp_available &>/dev/null && mcp_available 2>/dev/null; then
     local mcp_raw=""
     mcp_raw=$(mcp_search_knowledge "${query}" "${retrieve_top_k}" 2>/dev/null) || true
 
@@ -260,8 +281,8 @@ EOF
     fi
   fi
 
-  # 策略2：MCP 不可用或无结果时，回退到本地文件搜索
-  if [[ "${mcp_succeeded}" != "true" ]]; then
+  # 策略2：SQLite 和 MCP 均不可用或无结果时，回退到本地文件搜索
+  if [[ "${sqlite_succeeded}" != "true" && "${mcp_succeeded}" != "true" ]]; then
     retrieval_source="local"
     hits="$(knowledge_gate_search_local "${query}" "${knowledge_dir}")"
 

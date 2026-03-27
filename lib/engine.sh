@@ -248,7 +248,9 @@ PROMPT
       engine_log "info" "Tier 3: 调用 engine_critical_run 编排引擎"
       local tier3_code=0
       # engine_critical_run 在 stdout 输出流程信息，需要抑制以免污染 engine_run 的 JSON 输出
-      engine_critical_run "${task_id}" "${task_command}" >/dev/null 2>/dev/null || tier3_code=$?
+      local tier3_log="${BASHCLAW_ROOT}/.bashclaw/audit/tier3_${task_id}.log"
+      mkdir -p "$(dirname "${tier3_log}")"
+      engine_critical_run "${task_id}" "${task_command}" >>"${tier3_log}" 2>&1 || tier3_code=$?
       if [[ ${tier3_code} -eq 0 ]]; then
         # Critical #1 修复：Tier 3 交付前也需确认有实际代码变更
         if [[ "${repo_has_changes}" == "true" ]]; then

@@ -191,6 +191,42 @@ test_tier2_output_has_knowledge() {
 }
 
 ###############################################################################
+# 7. reviewer 崩溃不应静默通过（回归测试）
+###############################################################################
+test_reviewer_crash_not_silent_pass() {
+  _load_engine_reviewed
+
+  # 覆盖 run_review 使其崩溃
+  run_review() { return 1; }
+
+  # 同时覆盖 evaluate_skip_review 使其不跳过 review
+  evaluate_skip_review() { return 1; }
+
+  local result
+  local exit_code=0
+  result=$(run_tier2_reviewed "fix auth bug" "${TEST_TMP}" 2>/dev/null) || exit_code=$?
+
+  if [[ -n "${result}" ]]; then
+    local status
+    status=$(echo "${result}" | jq -r '.status // empty')
+    # 状态不应该是 DELIVERED 或 COMPLETED_NO_ISSUES
+    [[ "${status}" != "DELIVERED" ]] || {
+      echo "reviewer 崩溃时不应标记为 DELIVERED, 实际: ${status}" >&2
+      return 1
+    }
+    [[ "${status}" != "COMPLETED_NO_ISSUES" ]] || {
+      echo "reviewer 崩溃时不应标记为 COMPLETED_NO_ISSUES, 实际: ${status}" >&2
+      return 1
+    }
+    # 应该标记为 REVIEW_FAILED
+    [[ "${status}" == "REVIEW_FAILED" ]] || {
+      echo "reviewer 崩溃时应标记为 REVIEW_FAILED, 实际: ${status}" >&2
+      return 1
+    }
+  fi
+}
+
+###############################################################################
 # 运行所有测试
 ###############################################################################
 echo "== test_engine_reviewed.sh =="
@@ -209,5 +245,6 @@ run_test test_tier2_skip_review_path
 run_test test_tier2_review_with_issues
 run_test test_tier2_output_has_change_type
 run_test test_tier2_output_has_knowledge
+run_test test_reviewer_crash_not_silent_pass
 
 print_report "test_engine_reviewed.sh"

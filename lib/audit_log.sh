@@ -260,6 +260,7 @@ audit_log_stats() {
   local tier3_count=0
   local human_escalated_count=0
   local total_tokens=0
+  local knowledge_hit_tasks=0
 
   for f in "${log_dir}"/*.json; do
     [[ -f "${f}" ]] || continue
@@ -281,6 +282,11 @@ audit_log_stats() {
     local tok
     tok="$(jq -r '.token_total // 0' "${f}")"
     total_tokens=$((total_tokens + tok))
+
+    # Knowledge hit tracking
+    local kh
+    kh="$(jq -r '.knowledge_helpful // false' "${f}")"
+    [[ "${kh}" == "true" ]] && knowledge_hit_tasks=$((knowledge_hit_tasks + 1))
   done
 
   # 修复 High #5 + resolved_rate bug: 除数应为 total 而非 total+1，且用 jq 安全构造 JSON
@@ -291,6 +297,11 @@ audit_log_stats() {
     resolved_rate="0"
   fi
 
+  local knowledge_hit_rate="0"
+  if [[ "${total}" -gt 0 ]]; then
+    knowledge_hit_rate="$(echo "scale=2; ${knowledge_hit_tasks} * 100 / ${total}" | bc 2>/dev/null || echo "0")"
+  fi
+
   jq -n \
     --argjson total_tasks "${total}" \
     --argjson resolved "${resolved_count}" \
@@ -299,6 +310,8 @@ audit_log_stats() {
     --argjson human_escalations "${human_escalated_count}" \
     --argjson total_tokens "${total_tokens}" \
     --arg resolved_rate "${resolved_rate}%" \
+    --argjson knowledge_hit_tasks "${knowledge_hit_tasks}" \
+    --arg knowledge_hit_rate "${knowledge_hit_rate}%" \
     '{
       total_tasks: $total_tasks,
       resolved: $resolved,
@@ -306,6 +319,17 @@ audit_log_stats() {
       tier3_runs: $tier3_runs,
       human_escalations: $human_escalations,
       total_tokens: $total_tokens,
-      resolved_rate: $resolved_rate
+      resolved_rate: $resolved_rate,
+      knowledge_hit_tasks: $knowledge_hit_tasks,
+      knowledge_hit_rate: $knowledge_hit_rate
     }'
+}
+
+# 轻量级事件日志适配器（供其他模块使用）
+audit_log_event() {
+  local category="${1:-}" event="${2:-}" detail="${3:-}"
+  local log_dir="${AUDIT_LOG_DIR:-${BASHCLAW_ROOT}/.bashclaw/audit}"
+  mkdir -p "${log_dir}"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | ${category} | ${event} | ${detail}" \
+    >> "${log_dir}/events.log"
 }

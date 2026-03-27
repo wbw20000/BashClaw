@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-018",
+  "decision_title": "Node.js 模块间禁止循环 import，必须通过依赖反转解耦",
+  "task_summary": "排查并修复 Node.js 项目中的循环 import 导致模块导出为 undefined 的问题",
+  "applicable_scope": "Node.js module imports, ES modules, CommonJS require, dependency management",
+  "non_applicable_scope": "类型声明的循环引用（TypeScript 的 type-only import 不产生运行时循环）",
+  "final_decision": "使用 madge 工具在 CI 中检测循环依赖并阻断。发现循环时通过以下方式修复：1) 提取共享逻辑到独立模块 2) 使用依赖注入替代直接 import 3) 延迟 require（仅限 CommonJS 的过渡方案）",
+  "why": "模块 A import B，B import A。Node.js CommonJS 在遇到循环时返回 A 的部分导出（当前已执行完的部分）。ES modules 直接返回 undefined。bug 表现为运行时 TypeError: xxx is not a function，但只在特定 import 顺序下触发，极难在本地复现",
+  "known_pitfalls": [
+    "ESM 的循环 import 在 import 时不报错，只有在访问导出值时才是 undefined——错误发生位置远离真实原因",
+    "barrel file（index.ts 集中 re-export）会隐性引入循环依赖——A/index.ts export B，B import from A/index.ts 就构成循环",
+    "TypeScript 的 import type 不产生运行时 import，但 transpile 后如果 import type 被错误保留（如用于 decorators 或 runtime reflection）仍会导致循环"
+  ],
+  "validation_evidence": "madge 扫描发现项目中有 4 个循环依赖链，其中 2 个导致了间歇性的 is not a function 错误。重构后 madge --circular 返回 0 个循环",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["nodejs", "modules", "circular-dependency", "import"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

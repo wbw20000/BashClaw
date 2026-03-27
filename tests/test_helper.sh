@@ -35,6 +35,7 @@ TEST_TMP=""
 setup_tmp() {
   TEST_TMP="$(mktemp -d)"
   export BASHCLAW_ROOT="${TEST_TMP}"
+  export BASHCLAW_DB="${TEST_TMP}/.bashclaw/bashclaw.db"
   mkdir -p "${TEST_TMP}/.bashclaw/knowledge"
   mkdir -p "${TEST_TMP}/.bashclaw/audit"
   mkdir -p "${TEST_TMP}/.bashclaw/budget"

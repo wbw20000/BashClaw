@@ -30,19 +30,6 @@ if [[ -f "${BASHCLAW_ROOT}/lib/audit_log.sh" ]]; then
   source "${BASHCLAW_ROOT}/lib/audit_log.sh"
 fi
 
-# 轻量级事件日志适配器 — 兼容 audit_log.sh 的 audit_log_write API
-# 参数：$1=category, $2=event, $3=detail
-audit_log_event() {
-  local category="${1:-}"
-  local event="${2:-}"
-  local detail="${3:-}"
-  local log_dir="${AUDIT_LOG_DIR:-${BASHCLAW_ROOT}/.bashclaw/audit}"
-  mkdir -p "${log_dir}"
-  local timestamp
-  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "${timestamp} | ${category} | ${event} | ${detail}" \
-    >> "${log_dir}/events.log"
-}
 
 ###############################################################################
 # _with_lock — 通用文件锁包装函数，防止并发 read-modify-write 竞态

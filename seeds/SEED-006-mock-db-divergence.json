@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-006",
+  "decision_title": "集成测试必须使用真实数据库，不用 Mock",
+  "task_summary": "将数据库相关的集成测试从 Mock 方式迁移到使用 testcontainers 启动真实数据库实例",
+  "applicable_scope": "database integration tests, repository layer tests, migration tests",
+  "non_applicable_scope": "纯业务逻辑的单元测试, HTTP 客户端的 Mock 测试（外部 API 调用）",
+  "final_decision": "所有涉及数据库操作的集成测试必须连接真实数据库（通过 testcontainers 或专用测试数据库）。Mock 仅允许用于隔离外部服务依赖",
+  "why": "上季度线上事故：Mock 测试全部通过，但生产环境 migration 失败。原因是 Mock 的 DB 行为与真实 PostgreSQL 不一致——Mock 不校验外键约束、不执行 ON DELETE CASCADE、不检查 UNIQUE 冲突的时序。测试给了虚假信心",
+  "known_pitfalls": [
+    "Mock 不会体现数据库特有行为：PostgreSQL 的 NULL 排序、MySQL 的隐式类型转换、SQLite 的宽松类型系统——这些差异在 Mock 中完全不可见",
+    "testcontainers 启动容器需要 Docker，CI 环境必须配置 Docker-in-Docker 或 Docker socket 挂载",
+    "测试数据库需要在每个测试前清理状态，推荐使用事务回滚（BEGIN + ROLLBACK）而非 TRUNCATE，速度更快"
+  ],
+  "validation_evidence": "迁移后发现 3 个之前 Mock 测试未捕获的 bug：外键约束违反、UNIQUE 冲突、NULL 值排序不一致",
+  "issue_type": "regression_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["testing", "database", "mock", "integration-test"],
+  "changeType": "test_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

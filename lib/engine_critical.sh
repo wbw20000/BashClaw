@@ -109,14 +109,6 @@ if [[ -f "${BASHCLAW_ROOT}/lib/audit_log.sh" ]]; then
   source "${BASHCLAW_ROOT}/lib/audit_log.sh"
 fi
 
-# 轻量级事件日志适配器
-audit_log_event() {
-  local category="${1:-}" event="${2:-}" detail="${3:-}"
-  local log_dir="${AUDIT_LOG_DIR:-${BASHCLAW_ROOT}/.bashclaw/audit}"
-  mkdir -p "${log_dir}"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | ${category} | ${event} | ${detail}" \
-    >> "${log_dir}/events.log"
-}
 
 ###############################################################################
 # engine_critical_run — 执行 Tier 3 Critical 完整流程

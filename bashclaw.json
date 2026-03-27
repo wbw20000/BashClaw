@@ -62,8 +62,9 @@
     ]
   },
   "knowledge": {
-    "provider": "mcp",
-    "mcp_fallback": "local",
+    "provider": "local",
+    "store_type": "sqlite",
+    "mcp_fallback": "mcp",
     "mcp_endpoint": "",
     "retrieveTopK": 5,
     "minSimilarity": 0.75

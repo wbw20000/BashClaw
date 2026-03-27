@@ -33,14 +33,6 @@ if [[ -f "${BASHCLAW_ROOT}/lib/audit_log.sh" ]]; then
   source "${BASHCLAW_ROOT}/lib/audit_log.sh"
 fi
 
-# 轻量级事件日志适配器
-audit_log_event() {
-  local category="${1:-}" event="${2:-}" detail="${3:-}"
-  local log_dir="${AUDIT_LOG_DIR:-${BASHCLAW_ROOT}/.bashclaw/audit}"
-  mkdir -p "${log_dir}"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | ${category} | ${event} | ${detail}" \
-    >> "${log_dir}/events.log"
-}
 
 # 有效的记录节点（仅在首次 source 时定义）
 if [[ -z "${_TRACE_NODES_DEFINED:-}" ]]; then

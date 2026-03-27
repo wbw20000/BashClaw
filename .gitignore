@@ -29,6 +29,11 @@ Desktop.ini
 .vscode/
 *.sublime-*
 
+# Node.js
+node_modules/
+bin/*.js
+bin/*.js.map
+
 # 临时文件
 tmp/
 *.tmp

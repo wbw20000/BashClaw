@@ -331,6 +331,7 @@ run_tier2_reviewed() {
     # =========================================================================
     echo "=== Step 6: Reviewer ===" >&2
     local review_result
+    local review_failed="false"
     review_result=$(run_review \
         "$user_request" \
         "$diff_content" \
@@ -338,8 +339,9 @@ run_tier2_reviewed() {
         "$knowledge_output" \
         "$risk_tags" \
         "$change_type" 2>/dev/null) || {
-        echo "WARNING: Reviewer execution failed, treating as no issues found" >&2
-        review_result='{"status": "ERROR", "issues": [], "error": "reviewer failed"}'
+        echo "WARNING: Review FAILED — marking as REVIEW_FAILED (not passing as no-issues)" >&2
+        review_result='{"status": "ERROR", "issues": [], "review_status": "REVIEW_FAILED", "error": "reviewer failed"}'
+        review_failed="true"
     }
     _tier2_log "REVIEW_ISSUES" ""
 
@@ -450,6 +452,12 @@ run_tier2_reviewed() {
         else
             final_status="COMPLETED_ALL_RESOLVED"
         fi
+    fi
+
+    # reviewer 崩溃时不能静默通过 — 覆盖最终状态为 REVIEW_FAILED
+    if [[ "${review_failed}" == "true" ]]; then
+        final_status="REVIEW_FAILED"
+        # 不设置 resolved=true，让系统知道审查未完成
     fi
 
     # =========================================================================

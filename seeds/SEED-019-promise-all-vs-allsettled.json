@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-019",
+  "decision_title": "批量异步操作需根据容错需求选择 Promise.all 或 Promise.allSettled",
+  "task_summary": "修复批量通知发送因 Promise.all 在单个失败时丢弃全部结果的 bug",
+  "applicable_scope": "batch async operations, parallel API calls, bulk data processing, notification sending",
+  "non_applicable_scope": "单个 Promise 的错误处理, 必须全部成功才有意义的事务性操作（如转账）",
+  "final_decision": "事务性操作（全部成功或全部失败）使用 Promise.all。容错性操作（部分失败不影响整体）使用 Promise.allSettled，并在结果中分别处理 fulfilled 和 rejected 项。对 rejected 项记录详细日志并根据业务需求决定是否重试",
+  "why": "批量发送 100 个推送通知使用 Promise.all，其中第 3 个用户的设备 token 失效导致该 Promise reject。Promise.all 立即 reject 并丢弃了其余 97 个成功的结果。上游代码收到 reject 后认为全部失败，触发了完整重试，导致收到通知的用户收到了重复推送",
+  "known_pitfalls": [
+    "Promise.allSettled 的结果是 {status, value/reason} 对象数组，不能直接当作值数组使用——需要先 filter 出 fulfilled 项",
+    "Promise.all 的 fast-fail 行为意味着其他 Promise 仍在执行（不会被取消），可能产生副作用——如果需要取消，需要配合 AbortController",
+    "大量并行 Promise（如 10000 个并发 HTTP 请求）会耗尽内存和连接——需要用 p-limit 或类似库控制并发数"
+  ],
+  "validation_evidence": "改用 Promise.allSettled 后，100 个通知中 3 个失败，97 个成功送达。失败的 3 个被记录到重试队列，无重复推送",
+  "issue_type": "logic_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["javascript", "async", "promise", "error-handling"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

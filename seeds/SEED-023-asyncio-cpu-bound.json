@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-023",
+  "decision_title": "asyncio 中 CPU 密集任务必须使用 run_in_executor 卸载到线程池",
+  "task_summary": "修复异步 Web 服务中因 CPU 密集计算阻塞事件循环导致全部请求响应延迟的问题",
+  "applicable_scope": "asyncio applications, FastAPI/Starlette handlers, aiohttp servers, async task processing",
+  "non_applicable_scope": "纯同步的 Flask/Django 应用（每个请求在独立线程中）, 无事件循环的 CLI 脚本",
+  "final_decision": "所有耗时超过 10ms 的 CPU 密集操作（JSON 序列化大对象、图片处理、加密计算、数据聚合）必须通过 loop.run_in_executor(None, func) 卸载到线程池。真正的 CPU 密集型任务（持续超过 100ms）应使用 ProcessPoolExecutor 避免 GIL 限制",
+  "why": "FastAPI 的报表导出接口在 async handler 中直接用 pandas 做数据聚合（CPU 密集约 2 秒）。期间事件循环被阻塞，同一进程的所有其他请求（包括健康检查）都无法响应。Kubernetes 健康检查超时，触发 Pod 重启，导致服务不可用",
+  "known_pitfalls": [
+    "asyncio 的默认线程池是 ThreadPoolExecutor，受 GIL 限制——CPU 密集任务用线程池只能实现并发不能实现并行，需要用 ProcessPoolExecutor",
+    "run_in_executor 中的函数不能使用 async/await——它运行在普通线程中。如果需要在其中调用异步函数，需要用 asyncio.run_coroutine_threadsafe()",
+    "ProcessPoolExecutor 的 worker 进程间传递数据需要序列化（pickle），大对象的序列化开销可能抵消并行收益"
+  ],
+  "validation_evidence": "压测对比：修复前 1 个报表请求会导致同时的 99 个简单查询 P99 从 50ms 飙升到 2100ms。修复后 P99 稳定在 60ms",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["python", "asyncio", "cpu-bound", "event-loop", "performance"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

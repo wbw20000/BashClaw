@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-003",
+  "decision_title": "日志输出必须过滤环境变量和密钥信息",
+  "task_summary": "在日志中间件中添加敏感字段脱敏过滤器，防止 API key、数据库密码等通过日志泄露",
+  "applicable_scope": "logging configuration, error reporting, debug output, startup banner logs",
+  "non_applicable_scope": "审计日志中经过加密存储的合规字段, 本地开发环境 DEBUG 级别日志（但仍建议脱敏）",
+  "final_decision": "所有日志输出必须经过 SecretFilter 中间件。匹配模式包括：以 _KEY、_SECRET、_TOKEN、_PASSWORD、_CREDENTIAL 结尾的环境变量名，以及符合 AWS/GCP/Azure 密钥格式的值。匹配到的值替换为 [REDACTED]",
+  "why": "线上事故复盘发现，某次 debug 日志中打印了完整的请求上下文对象，其中包含注入的环境变量 DATABASE_URL（含用户名和密码）。该日志被同步到第三方日志平台，导致凭据暴露。修复花费了 6 小时轮换所有受影响的凭据",
+  "known_pitfalls": [
+    "Python 的 logging.exception() 会打印完整 traceback，其中局部变量可能包含密钥——需要自定义 Formatter 过滤",
+    "结构化日志（JSON 格式）中嵌套对象的深层字段也可能泄露，过滤器需要递归处理",
+    "启动日志经常打印 config 摘要用于调试，这是泄露环境变量的高发区"
+  ],
+  "validation_evidence": "单元测试验证：构造包含 AWS_SECRET_ACCESS_KEY=AKIA... 的日志消息，经过 SecretFilter 后输出为 AWS_SECRET_ACCESS_KEY=[REDACTED]",
+  "issue_type": "security_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["logging", "secrets", "credential-leak"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}
