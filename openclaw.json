@@ -1,0 +1,183 @@
+{
+  "version": "1.0.0",
+  "name": "openclaw",
+  "description": "Agent-oriented knowledge-first workflow platform, sharing BashClaw core logic",
+  "platform": "openclaw",
+  "engines": {
+    "primary": "opus4.6",
+    "reviewer": "codex",
+    "fallback": "opus4.6"
+  },
+  "tiers": {
+    "tier1": {
+      "name": "default",
+      "knowledge_gate": false,
+      "reviewer": false,
+      "human_escalation": false,
+      "memory_writeback": "optional"
+    },
+    "tier2": {
+      "name": "reviewed",
+      "knowledge_gate": true,
+      "reviewer": true,
+      "human_escalation": false,
+      "memory_writeback": "on_reusable_experience"
+    },
+    "tier3": {
+      "name": "critical",
+      "knowledge_gate": true,
+      "reviewer": true,
+      "human_escalation": true,
+      "memory_writeback": "mandatory"
+    }
+  },
+  "budget": {
+    "maxTier2RunsPerDay": 20,
+    "maxTier3RunsPerDay": 3,
+    "maxHumanEscalationsPerDay": 5,
+    "maxUnverifiableIssuesPerTask": 3,
+    "warnOnTierOverflow": true
+  },
+  "risk_keywords": [
+    "auth", "permission", "oauth", "token", "secret",
+    "payment", "billing", "deploy", "migration", "schema",
+    "prod", "acl"
+  ],
+  "diff_patterns": [
+    "token", "session", "jwt", "role", "permission", "tenant",
+    "secret", "credential", "env", "migration", "alter table",
+    "deploy", "helm", "docker", "subprocess", "ssh"
+  ],
+  "change_types": [
+    "docs_only", "comment_only", "test_only", "logic_change",
+    "config_change", "schema_change", "infra_change", "mixed_change"
+  ],
+  "low_risk_change_types": [
+    "docs_only", "comment_only", "test_only"
+  ],
+  "validation": {
+    "results": [
+      "PASS", "FAIL_TEST", "FAIL_LINT", "FAIL_TYPECHECK",
+      "FAIL_REPRO", "FAIL_VALIDATE", "NO_VALIDATOR_FOUND"
+    ]
+  },
+  "knowledge_gate": {
+    "action_hints": [
+      "proceed", "proceed_with_caution", "require_review",
+      "require_human_if_unverifiable"
+    ],
+    "confidence_levels": ["low", "medium", "high"]
+  },
+  "human_escalation": {
+    "trigger_conditions": [
+      "UNVERIFIABLE",
+      "REQUIREMENT_CONFLICT",
+      "high_risk_unresolved",
+      "evidence_conflict",
+      "validation_unreliable",
+      "accumulated_risk"
+    ],
+    "high_risk_domains": ["auth", "payment", "migration", "deploy"],
+    "accumulated_risk_threshold": 3,
+    "context_fields": [
+      "original_requirement",
+      "knowledge_precheck",
+      "patch_summary",
+      "base_validation_result",
+      "reviewer_issues",
+      "verdict_per_issue",
+      "recommended_action"
+    ]
+  },
+  "memory_writeback": {
+    "trigger_types": [
+      "tier2_passed",
+      "tier3_decided",
+      "high_value_failure",
+      "validation_proven",
+      "false_positive"
+    ],
+    "required_fields": [
+      "decision_title", "task_summary", "applicable_scope",
+      "non_applicable_scope", "final_decision", "why",
+      "known_pitfalls", "validation_evidence", "issue_type",
+      "review_or_human_required", "risk_tags", "changeType",
+      "linked_issue", "linked_pr", "timestamp"
+    ],
+    "optional_fields": ["superseded_by"],
+    "quality": "prefer_few_and_accurate_over_many_and_noisy"
+  },
+  "issue_trace": {
+    "nodes": [
+      "INTAKE", "KNOWLEDGE_PRECHECK", "PLAN", "EXECUTOR_RESULT",
+      "BASE_VALIDATION", "REVIEW_ISSUES", "EVIDENCE_RESOLUTION",
+      "HUMAN_DECISION", "MEMORY_WRITEBACK", "FINAL_DELIVERY"
+    ],
+    "principles": [
+      "capture_key_decisions_not_full_conversations",
+      "one_task_one_issue",
+      "long_tasks_may_split_sub_issues",
+      "long_logs_go_to_artifacts"
+    ],
+    "github": {
+      "enabled": false,
+      "ledger_marker": "<!-- OPENCLAW_LEDGER -->",
+      "labels": ["openclaw-trace"]
+    }
+  },
+  "evidence_resolution": {
+    "verdicts": ["CONFIRMED", "REFUTED", "UNVERIFIABLE", "REQUIREMENT_CONFLICT"],
+    "methods": [
+      "targeted_test",
+      "static_rule",
+      "repro_step",
+      "historical_decision_match",
+      "risk_policy_match"
+    ]
+  },
+  "reviewer": {
+    "required_output_fields": [
+      "location", "issue_type", "risk_statement",
+      "why_it_matters", "verification_plan", "severity"
+    ],
+    "issue_types": [
+      "runtime_bug", "logic_bug", "missing_test", "security_risk",
+      "regression_risk", "requirement_conflict", "design_concern"
+    ]
+  },
+  "openclaw_specific": {
+    "agent_roles": [
+      "executor", "reviewer", "resolver", "coordinator", "knowledge"
+    ],
+    "mcp_integration": {
+      "enabled": false,
+      "endpoint": "",
+      "timeout_ms": 10000
+    },
+    "task_decomposition": {
+      "max_subtasks": 10,
+      "auto_risk_assessment": true
+    },
+    "context_management": {
+      "max_chain_length": 50,
+      "auto_knowledge_accumulation": true
+    },
+    "cross_task_memory": {
+      "search_sources": ["mcp", "local_knowledge", "task_chains"],
+      "promotion_requires_review": false
+    }
+  },
+  "directories": {
+    "audit_log": ".bashclaw/audit",
+    "knowledge": ".bashclaw/knowledge",
+    "issue_trace": ".bashclaw/issue_trace",
+    "artifacts": ".bashclaw/artifacts",
+    "escalations": ".bashclaw/escalations",
+    "budget_state": ".bashclaw/budget",
+    "runs": ".bashclaw/runs",
+    "openclaw_contexts": ".openclaw/contexts",
+    "openclaw_task_chains": ".openclaw/task_chains",
+    "openclaw_agents": ".openclaw/agents",
+    "openclaw_memory": ".openclaw/memory"
+  }
+}

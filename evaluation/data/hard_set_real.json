@@ -1,0 +1,2252 @@
+[
+  {
+    "task_id": "HS-001",
+    "title": "JWT refresh token 跨租户泄漏：刷新端点未校验 tenant_id 绑定",
+    "description": "token refresh 端点在验证 refresh_token 有效性时只检查了 user_id 和 expiry，未校验 refresh_token 是否属于当前请求的 tenant。攻击者可在租户 A 获取 refresh_token，在租户 B 的 domain 下调用 /auth/refresh，获得租户 B 上下文的 access_token。需要修改 refresh 逻辑、增加 tenant 绑定校验、补充集成测试，并对 token 表结构增加复合索引。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "token",
+      "tenant"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/auth/token_service.py",
+      "src/auth/refresh_handler.py",
+      "src/middleware/tenant_context.py",
+      "src/models/token.py",
+      "tests/test_token_refresh.py",
+      "migrations/0042_token_tenant_index.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型倾向于只在 refresh handler 增加 tenant 检查，遗漏 token_service 中的 create_refresh_token 也需要绑定 tenant_id，导致新发的 token 仍然缺少 tenant 关联",
+    "known_pitfalls": [
+      "修改 refresh_token 表结构后未更新 ORM model，导致运行时字段不匹配",
+      "添加 tenant_id 校验时忘记处理 tenant_id 为 null 的历史 token（需要迁移脚本回填）",
+      "复合索引 (user_id, tenant_id) 在大表上创建会锁表，需要 CONCURRENTLY 选项"
+    ],
+    "verification_criteria": [
+      "跨租户 refresh 请求返回 403 且日志记录安全事件",
+      "同租户 refresh 正常工作",
+      "历史 token 的迁移脚本正确回填 tenant_id",
+      "集成测试覆盖跨租户场景"
+    ],
+    "changed_files": 6,
+    "diff_lines": 243,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-002",
+    "title": "OAuth2 回调处理竞态：并发 callback 导致重复用户创建",
+    "description": "当用户首次通过 Google OAuth 登录时，系统在 callback 中检查用户是否存在，不存在则创建。在高并发场景下（如用户快速点击两次），两个并发 callback 请求同时通过 'user exists' 检查，各自创建一个用户记录，导致同一 OAuth ID 关联两个不同的内部用户。需要添加数据库级唯一约束、实现 upsert 模式，并处理已有重复数据的合并。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "oauth",
+      "concurrency"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/auth/oauth_callback.py",
+      "src/auth/user_provisioner.py",
+      "src/models/user.py",
+      "migrations/0043_unique_oauth_id.py",
+      "scripts/merge_duplicate_oauth_users.py",
+      "tests/test_oauth_concurrent.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只添加数据库唯一约束，忽略了需要同时修改 callback handler 的异常处理逻辑来优雅地处理 UniqueViolation，以及遗漏清理已有重复数据的迁移脚本",
+    "known_pitfalls": [
+      "直接加唯一约束会因已有重复数据导致迁移失败",
+      "使用应用层锁（如 Redis 分布式锁）而非数据库级保障，无法覆盖多实例场景",
+      "合并重复用户时需要更新所有外键引用（订单、权限、审计日志等），遗漏任何一个表都会导致数据不一致"
+    ],
+    "verification_criteria": [
+      "并发 100 个相同 OAuth callback 只创建一个用户",
+      "唯一约束迁移在有重复数据时先清理再添加",
+      "重复用户合并脚本正确迁移所有关联数据",
+      "新的 callback handler 在 UniqueViolation 时返回已有用户而非 500 错误"
+    ],
+    "changed_files": 6,
+    "diff_lines": 108,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-003",
+    "title": "RBAC 权限提升：通过 API 批量操作端点绕过单资源权限检查",
+    "description": "系统的 RBAC 在单资源操作端点（如 GET /api/users/{id}）正确实施了权限检查，但批量操作端点（如 POST /api/users/batch-update）只检查了调用者是否有 'users.update' 权限，未对批量中的每个资源逐一检查 row-level 权限。租户管理员可以通过批量接口修改不属于自己租户的用户数据。需要在批量操作的整个链路中注入 row-level 权限检查。",
+    "category": "security",
+    "difficulty": "hard",
+    "risk_tags": [
+      "permission",
+      "acl",
+      "tenant"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/api/batch_handler.py",
+      "src/rbac/permission_checker.py",
+      "src/rbac/row_level_policy.py",
+      "src/api/users.py",
+      "src/api/orders.py",
+      "tests/test_rbac_batch.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型会在 batch_handler 中添加循环检查，但忽略了 orders、projects 等其他同样有 batch 端点的模块需要相同的修复，导致修复不完整",
+    "known_pitfalls": [
+      "在循环中逐一查数据库校验权限会导致 N+1 问题，需要批量预加载权限",
+      "部分资源校验失败时的行为未定义——是全部回滚还是跳过失败项",
+      "row_level_policy 的 evaluate 方法签名需要支持批量 resource_ids 入参"
+    ],
+    "verification_criteria": [
+      "批量更新中包含越权资源时整批拒绝并返回详细错误",
+      "所有具有批量操作的端点（users, orders, projects）都已修复",
+      "性能测试：1000 条批量操作在 2 秒内完成权限校验",
+      "审计日志记录每次权限拒绝事件"
+    ],
+    "changed_files": 6,
+    "diff_lines": 86,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-004",
+    "title": "Session Fixation 防护：SSO 登录后未重新生成 Session ID",
+    "description": "用户通过 SAML SSO 登录后，系统复用了 SSO 之前的匿名 session ID。攻击者可以先访问登录页面获取一个 session ID，将该 session ID 注入到受害者的浏览器（通过 XSS 或网络中间人），受害者使用 SSO 登录后，攻击者使用之前的 session ID 即可访问受害者的已认证会话。需要在 SSO callback 完成后强制 regenerate session、清除旧 session 数据、并在 session store 中标记旧 session 为 invalidated。",
+    "category": "security",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "session",
+      "secret"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/auth/sso_callback.py",
+      "src/session/session_manager.py",
+      "src/session/redis_store.py",
+      "src/middleware/session_middleware.py",
+      "tests/test_session_fixation.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型会在 sso_callback 中添加 session.regenerate()，但不知道项目用的是自定义 session middleware（非标准 framework session），导致调用了不存在的方法或 regenerate 后旧 session 数据未迁移",
+    "known_pitfalls": [
+      "regenerate 后需要将购物车等匿名 session 数据迁移到新 session",
+      "Redis session store 中旧 session key 需要显式删除，否则会保留到 TTL 过期",
+      "如果使用 cookie-based session，需要同时更新 Set-Cookie 头的 secure 和 httponly 属性",
+      "并发请求场景下 regenerate 可能导致短暂的 session 丢失"
+    ],
+    "verification_criteria": [
+      "SSO 登录后 session ID 与登录前不同",
+      "旧 session ID 在 Redis 中已被删除或标记无效",
+      "匿名 session 中的合法数据（如购物车）迁移到新 session",
+      "安全扫描工具不再报告 session fixation 漏洞"
+    ],
+    "changed_files": 5,
+    "diff_lines": 269,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-005",
+    "title": "API Key 轮换不停机：双密钥并行期内旧 key 需继续有效",
+    "description": "当前 API key 轮换流程是直接替换，导致正在使用旧 key 的客户端立即失败。需要实现双密钥并行机制：生成新 key 后旧 key 在可配置的过渡期（默认 24 小时）内继续有效；过渡期结束后旧 key 自动失效。涉及 key 存储结构变更（支持多活 key）、认证中间件修改（检查所有活跃 key）、管理 API（触发轮换、查看状态、强制废弃旧 key）、以及定时任务（过期清理）。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "token",
+      "deploy"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/auth/api_key_service.py",
+      "src/auth/api_key_authenticator.py",
+      "src/models/api_key.py",
+      "src/api/admin/key_management.py",
+      "src/tasks/expire_old_keys.py",
+      "migrations/0044_api_key_versioning.py",
+      "tests/test_api_key_rotation.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型常在 api_key_authenticator 中硬编码检查两个 key，而非设计通用的多活 key 数据模型，导致无法支持紧急轮换（即三个 key 并行）场景",
+    "known_pitfalls": [
+      "认证中间件遍历多个 key 时需要防止时序攻击（使用 constant-time compare）",
+      "key 的 hash 存储方式变更需要向后兼容旧格式",
+      "定时任务在分布式部署中需要防止重复执行（使用分布式锁）",
+      "管理 API 的权限需要限制为 super admin，普通 admin 不能轮换全局 key"
+    ],
+    "verification_criteria": [
+      "轮换后旧 key 在过渡期内仍能认证成功",
+      "过渡期结束后旧 key 返回 401",
+      "管理 API 可查看当前所有活跃 key 的状态和过期时间",
+      "强制废弃功能可立即使旧 key 失效",
+      "并发轮换不会导致所有 key 同时失效"
+    ],
+    "changed_files": 7,
+    "diff_lines": 150,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-006",
+    "title": "CSRF token 与 JWT 双重认证冲突：SPA 前端无法同时满足两套机制",
+    "description": "后端同时要求 JWT Bearer token 和 CSRF token。SPA 前端在 fetch 请求中通过 Authorization header 传 JWT，但 CSRF 中间件要求 Cookie 中的 session 匹配。由于 SPA 是无状态 JWT 认证，没有 server-side session，导致 CSRF middleware 始终返回 403。需要重新设计认证策略：对 JWT 认证的 API 端点豁免 CSRF 检查（因为 Bearer token 本身防 CSRF），对 Cookie-based 认证的端点保留 CSRF。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "token",
+      "security_risk"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/middleware/csrf_middleware.py",
+      "src/middleware/auth_middleware.py",
+      "src/auth/jwt_authenticator.py",
+      "src/config/security_settings.py",
+      "tests/test_csrf_jwt_interaction.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型倾向于直接对所有 API 路径豁免 CSRF，导致 Cookie-based 认证的管理后台失去 CSRF 保护",
+    "known_pitfalls": [
+      "CSRF 豁免逻辑必须基于实际使用的认证方式（检测是否有 Bearer header），而非路径匹配",
+      "混合认证场景（既接受 JWT 也接受 Cookie）需要特殊处理",
+      "Custom header 方案（如 X-Requested-With）作为备选 CSRF 防护需要在 CORS 配置中正确声明",
+      "安全审计可能要求保留 CSRF 保护，需要在 security settings 中明确配置豁免策略"
+    ],
+    "verification_criteria": [
+      "JWT 认证的 API 请求不再因 CSRF 返回 403",
+      "Cookie-based 管理后台仍有 CSRF 保护",
+      "安全扫描不报 CSRF 缺失告警",
+      "配置中有明确的豁免策略文档化"
+    ],
+    "changed_files": 5,
+    "diff_lines": 142,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-007",
+    "title": "Token 黑名单跨实例不同步：登出后其他实例仍接受旧 token",
+    "description": "用户在实例 A 上登出后，token 被加入本地黑名单。但实例 B 和 C 不知道这个黑名单更新，继续接受已登出用户的 token。当前黑名单存在本地内存中。需要迁移到 Redis 共享黑名单，同时考虑 Redis 不可用时的降级策略、黑名单的 TTL 与 token 过期时间对齐、以及大规模黑名单场景下的查询性能。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "token",
+      "distributed"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/auth/token_blacklist.py",
+      "src/auth/logout_handler.py",
+      "src/cache/redis_client.py",
+      "src/config/cache_settings.py",
+      "tests/test_token_blacklist_distributed.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只做了 Redis 替换，未处理 Redis 不可用时的降级（此时应拒绝所有请求还是放行？），也未考虑黑名单 TTL 与 token max_age 不一致的问题",
+    "known_pitfalls": [
+      "Redis 降级策略需要明确：fail-open 有安全风险，fail-closed 有可用性风险",
+      "黑名单 TTL 应设为 token 最大剩余有效期，而非固定值",
+      "使用 Redis SET 数据结构而非简单 key-value，以支持高效的 SISMEMBER 查询",
+      "需要处理从本地黑名单到 Redis 黑名单的数据迁移（滚动部署期间两种模式并存）"
+    ],
+    "verification_criteria": [
+      "实例 A 登出后，实例 B 立即拒绝该 token",
+      "Redis 不可用时按配置策略降级（默认 fail-closed）",
+      "黑名单条目在 token 过期后自动清理",
+      "滚动部署期间新旧实例都能正确识别黑名单 token"
+    ],
+    "changed_files": 5,
+    "diff_lines": 137,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-008",
+    "title": "WebSocket 认证漏洞：连接建立后 token 过期不会断开",
+    "description": "WebSocket 连接在 upgrade 时验证了 JWT token，但连接建立后即使 token 过期也不会被断开。长连接用户（如实时聊天）可能在 token 过期后数小时仍保持连接并接收消息。需要实现 WebSocket 连接的周期性 token 验证机制：每隔 N 分钟校验一次 token 有效性，过期则发送重新认证通知，超时未重新认证则断开连接。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "token",
+      "websocket"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/ws/ws_connection_manager.py",
+      "src/ws/ws_auth_middleware.py",
+      "src/auth/token_validator.py",
+      "src/ws/ws_heartbeat.py",
+      "tests/test_ws_auth_lifecycle.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只在 heartbeat 中加 token 检查，忽略了需要给客户端发送 re-auth frame 的协议设计，以及如何处理检查期间客户端正在发送大消息的情况",
+    "known_pitfalls": [
+      "周期性检查不应阻塞消息处理，需要在独立的协程/线程中执行",
+      "re-auth 协议需要与前端约定好 frame type 和重新认证流程",
+      "大量连接同时执行 token 检查会产生 Redis 查询风暴，需要错开检查时间",
+      "断开连接前应清理服务端状态（如聊天室成员列表）"
+    ],
+    "verification_criteria": [
+      "token 过期后 60 秒内连接被断开",
+      "客户端收到 re-auth 通知后可以提交新 token 续期连接",
+      "10000 并发连接的 token 检查不超过 500ms",
+      "断开连接时相关状态正确清理"
+    ],
+    "changed_files": 5,
+    "diff_lines": 115,
+    "cluster_id": "auth-token",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-009",
+    "title": "OAuth scope escalation：通过 token exchange 获取超出原始授权的 scope",
+    "description": "系统支持 OAuth2 Token Exchange (RFC 8693) 用于服务间调用。当服务 A 持有 scope=read 的 token，向 token exchange 端点请求 scope=read,write 的新 token 时，exchange 端点只检查了目标 scope 是否合法，未检查是否为原始 scope 的子集。导致任何服务可以通过 exchange 提升自己的权限。需要在 token exchange 中实现 scope 缩减检查。",
+    "category": "security",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "oauth",
+      "permission"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/auth/token_exchange.py",
+      "src/auth/scope_validator.py",
+      "src/models/oauth_scope.py",
+      "tests/test_token_exchange_scope.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型在 scope 比较时只做了字符串子集检查，未处理层级 scope（如 admin:read 是 admin:* 的子集）和复合 scope 的场景",
+    "known_pitfalls": [
+      "scope 支持层级关系（如 user:profile:read），简单的字符串包含检查不够",
+      "token exchange 可能涉及 audience 切换，不同 audience 支持的 scope 不同",
+      "服务间的 scope 映射关系可能不是简单的子集关系（需要 scope mapping table）",
+      "修改后需要同步更新 OAuth 文档中的 scope 继承规则"
+    ],
+    "verification_criteria": [
+      "scope=read 的 token 无法 exchange 出 scope=read,write 的 token",
+      "scope=admin:* 的 token 可以 exchange 出 scope=admin:read 的 token",
+      "非法 scope 提升返回 insufficient_scope 错误",
+      "审计日志记录所有 scope escalation 尝试"
+    ],
+    "changed_files": 4,
+    "diff_lines": 268,
+    "cluster_id": "auth-permission",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-010",
+    "title": "CORS 配置宽松导致凭据窃取：Access-Control-Allow-Origin 动态反射请求头",
+    "description": "CORS 中间件为了兼容多前端域名，将请求的 Origin header 直接反射到 Access-Control-Allow-Origin 响应头，同时设置了 Access-Control-Allow-Credentials: true。这意味着任何网站都可以携带用户 Cookie 发起跨域请求。攻击者在恶意网站上嵌入 fetch 请求，即可读取用户的 API 响应数据。需要实现严格的 Origin 白名单机制。",
+    "category": "security",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "secret",
+      "cors"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/middleware/cors_middleware.py",
+      "src/config/cors_settings.py",
+      "src/config/env_config.py",
+      "tests/test_cors_security.py",
+      "tests/test_cors_whitelist.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": false,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只修改 CORS 中间件为白名单模式，但忽略了需要从环境变量/配置文件读取白名单、支持通配符子域名匹配、以及预检请求的缓存策略",
+    "known_pitfalls": [
+      "白名单需要支持 *.example.com 模式匹配，但不能用简单正则（需要防止 evil-example.com 匹配）",
+      "开发环境需要允许 localhost，但不能泄漏到生产配置",
+      "修改 CORS 后 CDN 缓存可能返回旧的 Access-Control-Allow-Origin 头",
+      "preflight 请求的 max-age 过长会导致白名单更新不及时生效"
+    ],
+    "verification_criteria": [
+      "非白名单 Origin 的请求不返回 CORS 头",
+      "白名单内的 Origin 正常返回 CORS 头",
+      "通配符子域名匹配安全（不误匹配相似域名）",
+      "开发/生产环境配置隔离",
+      "CDN 层的 Vary: Origin 头正确设置"
+    ],
+    "changed_files": 5,
+    "diff_lines": 106,
+    "cluster_id": "auth-permission",
+    "repo_level": false,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-011",
+    "title": "大表零停机添加非空列：users 表（5000 万行）添加 department_id NOT NULL",
+    "description": "产品需求要求为 users 表添加 department_id 字段（NOT NULL, FK -> departments），用于组织架构管理。users 表有 5000 万行，直接 ALTER TABLE ADD COLUMN ... NOT NULL DEFAULT 会锁表数分钟。需要设计多阶段迁移方案：(1) 添加可空列 (2) 后台回填数据 (3) 添加 NOT NULL 约束 (4) 添加外键约束，每步都要可回滚。同时需修改 ORM 模型和相关查询。",
+    "category": "migration",
+    "difficulty": "hard",
+    "risk_tags": [
+      "migration",
+      "schema",
+      "prod"
+    ],
+    "change_type": "schema_change",
+    "files_involved": [
+      "migrations/0045_add_department_id_nullable.py",
+      "migrations/0046_backfill_department_id.py",
+      "migrations/0047_department_id_not_null.py",
+      "src/models/user.py",
+      "src/services/user_service.py",
+      "scripts/backfill_department_id.py",
+      "tests/test_user_department_migration.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型倾向于写一个 migration 同时做 ADD COLUMN + SET DEFAULT + ALTER NOT NULL，在大表上会导致锁表超时；或者忘记处理回填期间新插入的行（需要同时修改 INSERT 逻辑默认填充 department_id）",
+    "known_pitfalls": [
+      "回填脚本必须分批处理（每批 1000-5000 行），避免长事务锁",
+      "回填期间新插入的行也需要有 department_id，否则 NOT NULL 约束添加时仍会失败",
+      "PostgreSQL 12+ 可以用 ADD COLUMN ... DEFAULT 不锁表，但 MySQL 不行——需确认数据库版本",
+      "外键约束添加需要验证所有 department_id 在 departments 表中存在",
+      "回滚计划：每个迁移步骤独立可回滚"
+    ],
+    "verification_criteria": [
+      "迁移过程中服务无中断（零停机）",
+      "所有现有行的 department_id 正确回填",
+      "新插入的行自动填充 department_id",
+      "外键约束生效",
+      "每步迁移可独立回滚"
+    ],
+    "changed_files": 7,
+    "diff_lines": 253,
+    "cluster_id": "schema-migration",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-012",
+    "title": "外键约束修改：orders.user_id 从 CASCADE 改为 RESTRICT 且有软删除依赖",
+    "description": "当前 orders.user_id 外键为 ON DELETE CASCADE，删除用户时会级联删除所有订单（包括已完成的订单），违反审计要求。需要改为 ON DELETE RESTRICT，但系统使用软删除（is_deleted 标记），真正的物理删除在 30 天后由定时任务执行。修改外键约束时需要处理：(1) 已软删除但有关联订单的用户（物理删除会失败）(2) 定时任务的删除逻辑需要先检查关联 (3) ORM 层的级联配置需要同步修改。",
+    "category": "migration",
+    "difficulty": "hard",
+    "risk_tags": [
+      "migration",
+      "schema",
+      "data_integrity"
+    ],
+    "change_type": "schema_change",
+    "files_involved": [
+      "migrations/0048_order_fk_restrict.py",
+      "src/models/order.py",
+      "src/models/user.py",
+      "src/tasks/purge_deleted_users.py",
+      "src/services/user_service.py",
+      "tests/test_order_user_fk.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只修改了外键约束，忽略了 purge_deleted_users 定时任务会因新约束而失败（无法删除有订单的用户），导致 30 天后生产环境报错",
+    "known_pitfalls": [
+      "修改外键约束需要先 DROP 旧约束再 ADD 新约束，中间有短暂的无约束窗口",
+      "ORM 层的 relationship cascade 设置需要与数据库层一致",
+      "purge 定时任务需要改为：先将关联订单的 user_id 置为匿名用户 ID，再删除用户",
+      "已有的软删除用户可能有数千条关联订单，需要分批处理"
+    ],
+    "verification_criteria": [
+      "删除有订单的用户返回明确错误（非 500）",
+      "purge 定时任务正确处理有关联订单的用户（匿名化而非删除）",
+      "已完成订单在用户删除后仍可查询（关联匿名用户）",
+      "ORM 级联配置与数据库一致"
+    ],
+    "changed_files": 6,
+    "diff_lines": 269,
+    "cluster_id": "schema-migration",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-013",
+    "title": "索引重建策略：生产环境 PostgreSQL 损坏索引的在线重建",
+    "description": "生产环境 PostgreSQL 的 orders 表 B-tree 索引 idx_orders_created_at 在一次意外断电后损坏（查询结果偶尔不正确）。需要在不停机的情况下重建索引。直接 REINDEX 会锁表。需要使用 CREATE INDEX CONCURRENTLY 创建新索引、验证新索引正确性、切换查询计划、删除旧索引。同时需要处理重建期间的查询性能下降预案。",
+    "category": "migration",
+    "difficulty": "hard",
+    "risk_tags": [
+      "migration",
+      "schema",
+      "prod"
+    ],
+    "change_type": "schema_change",
+    "files_involved": [
+      "migrations/0049_rebuild_orders_index.py",
+      "scripts/validate_index_integrity.sql",
+      "scripts/online_reindex.sh",
+      "monitoring/alerts/index_rebuild_alert.yaml"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": false,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接使用 REINDEX TABLE，导致锁表；或者使用 CONCURRENTLY 但忘记处理失败的 invalid 索引（CONCURRENTLY 失败后会留下 INVALID 状态的索引需要清理）",
+    "known_pitfalls": [
+      "CREATE INDEX CONCURRENTLY 不能在事务块中执行",
+      "CONCURRENTLY 失败后留下 INVALID 索引，必须 DROP 后重试",
+      "重建期间查询可能走 Seq Scan，需要提前预热新索引",
+      "需要在低峰期执行以减少对 WAL 和 I/O 的影响",
+      "验证脚本需要对比新旧索引的扫描结果一致性"
+    ],
+    "verification_criteria": [
+      "索引重建过程中表不锁定",
+      "新索引创建后查询结果正确",
+      "旧的损坏索引被安全删除",
+      "重建过程有监控告警配置",
+      "失败场景下的自动回滚（保留旧索引直到新索引就绪）"
+    ],
+    "changed_files": 4,
+    "diff_lines": 219,
+    "cluster_id": "schema-migration",
+    "repo_level": false,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-014",
+    "title": "数据回填脚本：2 亿条交易记录补充 currency_code 字段并支持回滚",
+    "description": "新的多币种功能要求交易记录有 currency_code 字段。2 亿条历史记录需要根据商户所在地区回填 currency_code。回填规则：按 merchant_id 关联 merchants 表获取 region，region 映射到默认 currency。但部分商户已变更 region（需要用历史 region）。需要设计批量回填脚本，支持中断续跑、进度记录、数据验证、回滚。",
+    "category": "migration",
+    "difficulty": "hard",
+    "risk_tags": [
+      "migration",
+      "data_integrity",
+      "payment"
+    ],
+    "change_type": "schema_change",
+    "files_involved": [
+      "scripts/backfill_currency_code.py",
+      "scripts/verify_currency_backfill.py",
+      "scripts/rollback_currency_backfill.py",
+      "src/models/transaction.py",
+      "migrations/0050_add_currency_code.py",
+      "config/region_currency_mapping.yaml"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接用当前 merchant region 回填，忽略了商户可能已变更 region 的情况；也未实现中断续跑机制，2 亿条数据不可能一次跑完",
+    "known_pitfalls": [
+      "需要使用 merchant 的历史 region（从 audit_log 或 merchant_history 表获取交易时的 region）",
+      "批量更新每批 5000 行，每批之间 sleep 100ms 避免锁竞争",
+      "进度记录到独立表（backfill_progress），支持按 last_processed_id 续跑",
+      "约 0.5% 的交易 merchant 已被删除，需要手动标记为 UNKNOWN",
+      "回滚脚本需要将 currency_code 设回 NULL 而非删除列"
+    ],
+    "verification_criteria": [
+      "所有交易记录的 currency_code 非空",
+      "按月份抽样验证 currency_code 与商户当时 region 一致",
+      "回填中断后可从断点续跑",
+      "回滚脚本可将 currency_code 置空",
+      "性能：每小时回填 2000 万条以上"
+    ],
+    "changed_files": 6,
+    "diff_lines": 102,
+    "cluster_id": "payment-validation",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-015",
+    "title": "多租户 schema 迁移：从共享表隔离到 schema-per-tenant",
+    "description": "系统从 shared-table 多租户模型迁移到 schema-per-tenant 模型（每个租户有独立的 PostgreSQL schema）。需要：(1) 为每个租户创建 schema (2) 将共享表中属于该租户的数据迁移到租户 schema (3) 修改所有查询的 search_path 设置 (4) 保持迁移过程中服务可用。涉及 200+ 个租户，共 50+ 张表。",
+    "category": "migration",
+    "difficulty": "hard",
+    "risk_tags": [
+      "migration",
+      "schema",
+      "tenant",
+      "prod"
+    ],
+    "change_type": "schema_change",
+    "files_involved": [
+      "scripts/create_tenant_schemas.py",
+      "scripts/migrate_tenant_data.py",
+      "src/db/connection_manager.py",
+      "src/middleware/tenant_db_router.py",
+      "src/models/base_model.py",
+      "migrations/0051_tenant_schema_setup.py",
+      "tests/test_schema_isolation.py",
+      "scripts/verify_data_completeness.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型无法处理这种规模的迁移——通常只修改 connection_manager 和少数几张表，遗漏大量需要 tenant-aware 改造的查询和 ORM model",
+    "known_pitfalls": [
+      "迁移过程中新数据仍写入共享表，需要双写机制或停写窗口",
+      "所有 JOIN 查询需要确保在同一 schema 内执行",
+      "跨租户报表查询需要动态切换 search_path 或使用 UNION ALL",
+      "外键引用共享表（如 global settings）需要使用 public schema 前缀",
+      "迁移后需要逐租户验证数据完整性（行数、关键聚合值对比）"
+    ],
+    "verification_criteria": [
+      "每个租户的数据仅在自己的 schema 中可见",
+      "跨租户查询返回空结果（无数据泄漏）",
+      "数据迁移后行数与源表一致",
+      "服务在迁移过程中无中断（或中断 < 5 分钟）",
+      "全局共享数据（如 regions、currencies）仍可跨租户访问"
+    ],
+    "changed_files": 8,
+    "diff_lines": 231,
+    "cluster_id": "schema-migration",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-016",
+    "title": "枚举类型迁移：PostgreSQL ENUM 添加新值需向后兼容且不锁表",
+    "description": "order_status 是 PostgreSQL ENUM 类型，当前值为 [pending, processing, completed, cancelled]。产品需求要增加 refunded 和 partially_refunded 两个新值。PostgreSQL 的 ALTER TYPE ... ADD VALUE 不能在事务中执行，与 Django/Alembic 迁移框架冲突。需要设计绕过方案（如改用 VARCHAR + CHECK 约束，或使用 raw SQL 迁移），同时确保 ORM 层和所有引用 order_status 的查询都更新。",
+    "category": "migration",
+    "difficulty": "hard",
+    "risk_tags": [
+      "migration",
+      "schema"
+    ],
+    "change_type": "schema_change",
+    "files_involved": [
+      "migrations/0052_add_order_status_values.py",
+      "src/models/order.py",
+      "src/services/order_service.py",
+      "src/api/order_endpoints.py",
+      "tests/test_order_status_enum.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接在标准迁移框架中使用 ALTER TYPE ADD VALUE，在事务中执行失败；或者改用 VARCHAR 但忘记更新所有引用 ENUM 类型的 ORM 字段定义和 CHECK 约束",
+    "known_pitfalls": [
+      "ALTER TYPE ADD VALUE 在 PostgreSQL 中不能回滚（不能 DROP VALUE）",
+      "如果改用 VARCHAR + CHECK，需要更新所有直接引用 ENUM 类型的 SQL 查询",
+      "ORM 层的 Enum Python 类需要同步添加新值",
+      "已有的状态机逻辑（state transition rules）需要添加到新状态的转换规则",
+      "API 的 OpenAPI spec 中 status 字段的 enum 需要同步更新"
+    ],
+    "verification_criteria": [
+      "新的状态值可以正常写入和读取",
+      "旧代码读到新状态值不会崩溃（向后兼容）",
+      "状态转换规则正确（如 completed -> refunded 合法，pending -> refunded 非法）",
+      "API 文档反映新状态值",
+      "迁移可在 CI 环境成功执行"
+    ],
+    "changed_files": 5,
+    "diff_lines": 188,
+    "cluster_id": "schema-migration",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-017",
+    "title": "分库分表后的跨分片查询：按 user_id 分片后无法按 order_date 范围查询",
+    "description": "orders 表按 user_id 哈希分到 16 个分片。产品运营需要按 order_date 范围查询所有分片的订单（如「昨天所有订单」）。当前实现是向所有 16 个分片发查询再合并，性能极差（P99 > 10s）。需要设计辅助索引方案：(1) 维护 order_date -> shard 的索引表 (2) 或使用 Elasticsearch 做二级索引 (3) 考虑数据一致性。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "data_integrity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/db/shard_router.py",
+      "src/services/order_query_service.py",
+      "src/search/elasticsearch_sync.py",
+      "src/models/order_date_index.py",
+      "src/tasks/sync_order_index.py",
+      "tests/test_cross_shard_query.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常选择 Elasticsearch 方案但不处理同步延迟和数据不一致问题，或者只优化了查询合并逻辑但无法根本解决 scatter-gather 的性能问题",
+    "known_pitfalls": [
+      "ES 同步延迟导致近实时查询结果不完整（近 1-2 秒的数据可能缺失）",
+      "辅助索引表本身也需要分片策略（按日期分区）",
+      "写入链路增加 ES 同步不应影响主流程的延迟（异步 + 重试）",
+      "需要处理 ES 和 DB 数据不一致的对账机制"
+    ],
+    "verification_criteria": [
+      "按日期范围查询 P99 < 500ms",
+      "查询结果与全分片扫描结果一致",
+      "ES 同步延迟 < 2 秒",
+      "主写入链路延迟增加 < 5ms",
+      "有对账脚本可验证 ES 与 DB 数据一致性"
+    ],
+    "changed_files": 6,
+    "diff_lines": 88,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-018",
+    "title": "破坏性 API 变更向后兼容：用户地址从单值改为数组",
+    "description": "API v2 中 user.address 从 string 改为 [Address] 数组（支持多地址）。大量移动端客户端仍使用 v1 API，期望 address 是 string。需要：(1) v1 API 返回 primary_address 作为 address 字段 (2) v2 API 返回地址数组 (3) 写入时 v1 的 address 更新 primary_address (4) v2 的地址数组操作正常工作。需要 API 版本路由、序列化层适配、数据模型迁移。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "backward_compat"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/api/v1/user_serializer.py",
+      "src/api/v2/user_serializer.py",
+      "src/api/router.py",
+      "src/models/user_address.py",
+      "src/services/address_service.py",
+      "migrations/0053_user_address_table.py",
+      "tests/test_api_v1_compat.py",
+      "tests/test_api_v2_address.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型修改了 v2 但忘记在 v1 serializer 中保持 address 为字符串类型的兼容，或者 v1 写入时没有正确设置 is_primary 标记导致多地址混乱",
+    "known_pitfalls": [
+      "v1 客户端更新 address 时需要只修改 primary_address，不影响其他地址",
+      "用户当前只有一个 address 字段，迁移时需要创建 user_address 表并将现有数据作为 primary",
+      "v1 和 v2 的并发写入可能导致 primary_address 状态不一致",
+      "GraphQL 客户端如果同时存在，也需要适配",
+      "API 文档需要明确标注 v1 的 deprecation 时间表"
+    ],
+    "verification_criteria": [
+      "v1 GET 返回 {address: 'string'} 格式",
+      "v2 GET 返回 {addresses: [{...}]} 格式",
+      "v1 PUT address 只修改 primary_address",
+      "v2 POST address 正确添加非 primary 地址",
+      "迁移后现有数据作为 primary_address 正确关联"
+    ],
+    "changed_files": 8,
+    "diff_lines": 87,
+    "cluster_id": "api-features",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-019",
+    "title": "GraphQL schema 演进：废弃字段下线策略与客户端影响分析",
+    "description": "GraphQL schema 中的 User.fullName 字段需要替换为 User.firstName + User.lastName。fullName 已标记 @deprecated 6 个月，但分析显示仍有 15% 的查询在使用。需要：(1) 实现 fullName 的计算字段（从 firstName + lastName 拼接）(2) 添加 query 分析中间件追踪 deprecated 字段使用 (3) 设计渐进式下线计划（先返回计算值，3 个月后返回 null + 警告，6 个月后移除）。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "backward_compat"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/graphql/schema/user.graphql",
+      "src/graphql/resolvers/user_resolver.py",
+      "src/graphql/middleware/deprecation_tracker.py",
+      "src/graphql/middleware/deprecation_config.yaml",
+      "src/metrics/deprecated_field_usage.py",
+      "tests/test_graphql_deprecation.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常直接移除字段或只实现计算字段，忽略了需要追踪使用量和渐进式下线策略",
+    "known_pitfalls": [
+      "GraphQL introspection 查询需要仍然返回 deprecated 字段（带 @deprecated 标记）",
+      "query complexity 计算需要包含 deprecated 字段的开销",
+      "某些客户端使用 fragment 展开全部字段，需要识别这类 query",
+      "deprecation 配置需要支持按客户端 ID 单独延长过渡期"
+    ],
+    "verification_criteria": [
+      "fullName 返回 firstName + lastName 的拼接值",
+      "deprecated 字段使用被记录到 metrics",
+      "响应头中包含 deprecated 字段使用警告",
+      "配置可按时间阶段控制字段行为（计算值 -> null + 警告 -> 移除）"
+    ],
+    "changed_files": 6,
+    "diff_lines": 103,
+    "cluster_id": "api-features",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-020",
+    "title": "跨服务接口版本升级：订单服务调用支付服务 v2 但灰度期 v1/v2 共存",
+    "description": "支付服务升级到 v2，接口签名变更（请求体从 {amount: int, currency: 'USD'} 改为 {money: {value: '10.50', currency: 'USD'}}）。订单服务需要在灰度期间同时支持调用 v1 和 v2 支付接口，通过 feature flag 控制。需要实现适配器模式、重试降级（v2 失败回退 v1）、以及两个版本的 response 格式统一映射。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "payment",
+      "deploy"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/clients/payment_client.py",
+      "src/clients/payment_v1_adapter.py",
+      "src/clients/payment_v2_adapter.py",
+      "src/clients/payment_adapter_factory.py",
+      "src/config/feature_flags.py",
+      "tests/test_payment_client_v1v2.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型在适配器中硬编码版本切换逻辑，未实现降级回退；或者在 v2 adapter 中精度处理错误（int cents vs decimal string 转换丢精度）",
+    "known_pitfalls": [
+      "金额从 int (cents) 到 decimal string 转换时的精度问题",
+      "v2 的 idempotency key 格式变更需要兼容",
+      "降级回退时需要确保不会重复扣款（v2 失败但实际已处理）",
+      "灰度期结束后需要清理 v1 adapter 代码（feature flag 遗留）",
+      "超时配置 v2 可能与 v1 不同"
+    ],
+    "verification_criteria": [
+      "feature flag 开启时使用 v2 接口",
+      "v2 调用失败时自动降级到 v1",
+      "金额精度在转换过程中无损",
+      "idempotency 在版本切换中保持一致",
+      "灰度比例可动态调整"
+    ],
+    "changed_files": 6,
+    "diff_lines": 135,
+    "cluster_id": "payment-validation",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-021",
+    "title": "API 限流策略实现：多维度（用户/IP/端点）滑动窗口限流",
+    "description": "需要实现三层限流：(1) 全局 IP 限流 1000 req/min (2) 认证用户 100 req/min (3) 敏感端点（如 /auth/login, /api/export）单独限流 10 req/min。使用 Redis 滑动窗口算法。需要考虑：分布式环境下 Redis 时钟同步、限流信息在响应头中返回（X-RateLimit-*）、超限时返回 429 + Retry-After、以及白名单机制（内部服务间调用不限流）。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "security_risk",
+      "performance"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/middleware/rate_limiter.py",
+      "src/middleware/rate_limit_config.py",
+      "src/cache/redis_sliding_window.py",
+      "src/config/rate_limit_settings.yaml",
+      "tests/test_rate_limiter.py",
+      "tests/test_rate_limit_distributed.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": false,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型常使用固定窗口而非滑动窗口（导致窗口边界处突发两倍流量），或在 Redis 操作中未使用 Lua 脚本保证原子性",
+    "known_pitfalls": [
+      "滑动窗口需要 Redis ZSET + Lua 脚本保证原子性（ZADD + ZREMRANGEBYSCORE + ZCARD）",
+      "Redis 不可用时的降级策略（不能拒绝所有请求，也不能完全放行）",
+      "X-RateLimit-Remaining 头的值在并发场景下可能不准确（可接受的近似值）",
+      "白名单检查需要在限流之前执行以减少 Redis 查询",
+      "不同端点的限流窗口大小不同，配置需要灵活"
+    ],
+    "verification_criteria": [
+      "单 IP 第 1001 个请求在 1 分钟内返回 429",
+      "响应头包含 X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset",
+      "滑动窗口准确（窗口边界无突发放行）",
+      "内部服务调用不受限流影响",
+      "Redis 不可用时按配置降级"
+    ],
+    "changed_files": 6,
+    "diff_lines": 139,
+    "cluster_id": "perf-optimization",
+    "repo_level": false,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-022",
+    "title": "GraphQL N+1 优化：嵌套 3 层关联查询产生 10000+ SQL",
+    "description": "查询 `{orders { items { product { category { name } } } } }` 对 100 个订单产生 100 * N items * 1 product * 1 category = 10000+ SQL 查询。需要实现 DataLoader 模式批量加载：在每一层收集所有 ID，一次性批量查询。同时需要处理 DataLoader 的缓存失效、嵌套 DataLoader 的依赖关系、以及 GraphQL query complexity 限制防止恶意深度嵌套查询。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "api"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/graphql/dataloaders/order_item_loader.py",
+      "src/graphql/dataloaders/product_loader.py",
+      "src/graphql/dataloaders/category_loader.py",
+      "src/graphql/resolvers/order_resolver.py",
+      "src/graphql/middleware/query_complexity.py",
+      "tests/test_graphql_n_plus_one.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型实现了第一层 DataLoader 但忽略了嵌套层的批量加载，导致 product -> category 仍是 N+1；或者 DataLoader 缓存在请求间共享导致数据过期",
+    "known_pitfalls": [
+      "DataLoader 实例必须 per-request 创建，不能跨请求共享（缓存污染）",
+      "嵌套 DataLoader 的执行顺序需要正确的 event loop 调度",
+      "query complexity 限制需要在执行前计算（通过 AST 分析），而非执行后统计",
+      "分页场景下 DataLoader 的 batch key 需要包含分页参数"
+    ],
+    "verification_criteria": [
+      "100 订单的嵌套查询 SQL 数量 < 10 条",
+      "query complexity 超限返回明确错误",
+      "DataLoader 缓存不跨请求泄漏",
+      "响应时间从 > 5s 降到 < 200ms"
+    ],
+    "changed_files": 6,
+    "diff_lines": 209,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-023",
+    "title": "API 降级策略：依赖服务不可用时返回缓存数据而非 500",
+    "description": "当推荐服务不可用时，商品列表 API 返回 500 错误。需要实现优雅降级：(1) 推荐服务超时 > 200ms 时使用预热缓存的推荐结果 (2) 缓存也不可用时返回热门商品兜底 (3) 完全降级时隐藏推荐模块但商品列表正常返回。需要实现 Circuit Breaker 模式、多级降级、降级状态上报监控。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "performance",
+      "deploy"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/clients/recommendation_client.py",
+      "src/patterns/circuit_breaker.py",
+      "src/services/product_list_service.py",
+      "src/cache/recommendation_cache.py",
+      "src/monitoring/degradation_metrics.py",
+      "tests/test_api_degradation.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常实现了基本的 try-catch + 缓存回退，但缺少 Circuit Breaker（导致大量请求仍打到已宕机的服务）和降级状态监控上报",
+    "known_pitfalls": [
+      "Circuit Breaker 的半开状态需要限制探测请求数量",
+      "缓存预热策略：冷启动时缓存为空，降级会返回空推荐",
+      "降级状态需要在响应中标记（如 header X-Degraded: recommendations）以便客户端调整 UI",
+      "监控需要区分 timeout 降级和 error 降级，便于排查"
+    ],
+    "verification_criteria": [
+      "推荐服务下线后 API 在 300ms 内返回带缓存推荐的结果",
+      "Circuit Breaker 在连续 5 次失败后打开，不再调用推荐服务",
+      "半开状态每 30 秒尝试一次探测",
+      "降级事件上报到监控系统",
+      "响应中包含降级标记"
+    ],
+    "changed_files": 6,
+    "diff_lines": 234,
+    "cluster_id": "infra-deploy",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-024",
+    "title": "REST API 分页游标从 offset 切换到 cursor-based：不破坏现有客户端",
+    "description": "当前 API 使用 offset/limit 分页（GET /api/items?offset=100&limit=20），大 offset 查询性能差（PostgreSQL offset 10000 需要扫描 10000 行）。需要迁移到 cursor-based 分页（GET /api/items?cursor=xxx&limit=20），同时保持 offset 方式向后兼容。cursor 基于最后一条记录的排序字段编码。需要处理排序字段多样性（按 created_at、name、id 等不同字段排序时 cursor 格式不同）。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "performance",
+      "backward_compat"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/api/pagination.py",
+      "src/api/cursor_encoder.py",
+      "src/db/query_builder.py",
+      "src/api/items_endpoint.py",
+      "src/api/orders_endpoint.py",
+      "tests/test_cursor_pagination.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型实现了基本的 cursor 编码但未处理多排序字段场景（如 ORDER BY created_at DESC, id ASC 的复合 cursor），或者 cursor 编码未加密导致可被篡改",
+    "known_pitfalls": [
+      "cursor 需要 base64 编码且签名防篡改",
+      "复合排序字段的 cursor 需要包含所有排序字段的值",
+      "offset 参数仍需支持但添加 deprecation 警告",
+      "cursor 分页在数据变更时可能出现重复或遗漏（需要文档说明）",
+      "需要统一处理所有列表端点，不能只改一个"
+    ],
+    "verification_criteria": [
+      "cursor 分页 offset=10000 场景下性能提升 10x 以上",
+      "offset 方式仍然可用（返回 deprecation 警告头）",
+      "cursor 被篡改时返回 400 错误",
+      "不同排序字段生成不同格式的 cursor",
+      "所有列表端点都支持 cursor 参数"
+    ],
+    "changed_files": 6,
+    "diff_lines": 86,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-025",
+    "title": "数据库死锁修复：并发订单处理时 inventory 和 order 表交叉锁定",
+    "description": "订单处理流程先锁 inventory 行扣减库存，再锁 order 行更新状态。退款流程先锁 order 行检查状态，再锁 inventory 行恢复库存。当订单处理和退款并发执行时产生死锁。需要统一锁序（所有流程先锁 inventory 再锁 order）或改用乐观锁方案。需要在不改变业务语义的前提下解决。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "concurrency",
+      "payment",
+      "data_integrity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/services/order_processor.py",
+      "src/services/refund_processor.py",
+      "src/services/inventory_service.py",
+      "src/db/lock_manager.py",
+      "tests/test_concurrent_order_refund.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只在一个流程中调整锁序，遗漏其他也涉及相同表的流程（如库存盘点、批量取消等），导致死锁在不同路径重新出现",
+    "known_pitfalls": [
+      "统一锁序后需要审查所有涉及 inventory 和 order 的事务路径",
+      "乐观锁方案需要处理重试逻辑和最大重试次数",
+      "SELECT FOR UPDATE NOWAIT 在锁竞争时立即失败，需要应用层重试",
+      "死锁检测日志需要记录完整的锁等待链，便于排查",
+      "测试需要可靠地重现死锁场景（使用 barrier 同步两个事务的时序）"
+    ],
+    "verification_criteria": [
+      "并发 100 个订单处理 + 100 个退款无死锁",
+      "所有涉及双表操作的流程都按统一锁序执行",
+      "死锁发生时有明确的日志和告警",
+      "乐观锁重试不超过 3 次",
+      "业务正确性：库存数与订单数一致"
+    ],
+    "changed_files": 5,
+    "diff_lines": 223,
+    "cluster_id": "payment-validation",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-026",
+    "title": "缓存一致性：Redis 缓存与数据库在并发更新时出现长期不一致",
+    "description": "商品详情页使用 Redis 缓存（TTL 10 分钟）。当商品信息更新时，先更新数据库再删除缓存。但在高并发场景下出现不一致：请求 A 查缓存未命中 -> 请求 A 查 DB 获得旧值 -> 请求 B 更新 DB -> 请求 B 删除缓存 -> 请求 A 将旧值写入缓存。此时缓存中是旧值，且需要等 TTL 过期才能更新。需要设计可靠的缓存更新策略。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "concurrency",
+      "data_integrity",
+      "performance"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/cache/cache_manager.py",
+      "src/cache/cache_aside_strategy.py",
+      "src/services/product_service.py",
+      "src/cache/delayed_double_delete.py",
+      "tests/test_cache_consistency.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常实现简单的写后删缓存，未处理上述并发场景；或者使用分布式锁但引入了严重的性能退化",
+    "known_pitfalls": [
+      "延迟双删（更新后删缓存，延迟 N ms 再删一次）能缓解但不能完全解决",
+      "使用版本号/时间戳作为缓存 key 的一部分可以避免旧值覆盖新值",
+      "订阅 binlog (如 Canal) 做异步缓存更新是更可靠的方案但增加了架构复杂度",
+      "缓存预热策略在高并发下可能导致缓存击穿（同一 key 大量并发 miss）",
+      "需要 singleflight 机制防止缓存击穿"
+    ],
+    "verification_criteria": [
+      "并发更新场景下缓存不一致窗口 < 500ms",
+      "缓存击穿防护生效（同一 key 只有一个请求打到 DB）",
+      "延迟双删时间可配置",
+      "缓存更新失败不影响主流程",
+      "有监控指标跟踪缓存不一致率"
+    ],
+    "changed_files": 5,
+    "diff_lines": 130,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-027",
+    "title": "N+1 查询优化：ORM 延迟加载导致列表页面 200+ SQL 查询",
+    "description": "用户列表 API 返回 50 个用户，每个用户需要显示 department_name（延迟加载）、role_names（多对多延迟加载）、last_login_ip（关联表延迟加载）。导致 50 * 3 + 1 = 151 条 SQL。需要改为 eager loading，但不能影响其他使用 User model 但不需要这些关联的场景。需要在 API 层按需声明 eager load 策略。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/api/user_list_endpoint.py",
+      "src/services/user_service.py",
+      "src/models/user.py",
+      "src/db/query_optimizer.py",
+      "tests/test_user_list_query_count.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型在 User model 上全局设置 eager load，导致所有使用 User 的场景都加载不必要的关联，反而使简单查询变慢",
+    "known_pitfalls": [
+      "不同的 API 端点需要不同的 eager load 策略（列表页 vs 详情页 vs 编辑页）",
+      "多对多关系的 eager load 使用 subquery 还是 join 取决于数据量",
+      "eager load 深度嵌套（user -> roles -> permissions）可能产生笛卡尔积",
+      "需要在测试中断言 SQL 查询数量（使用 query counter middleware）",
+      "GraphQL 场景下应根据 query fields 动态决定 eager load"
+    ],
+    "verification_criteria": [
+      "用户列表 API 的 SQL 查询数 < 5 条",
+      "未请求关联字段的 API 不加载关联（零开销）",
+      "测试中有 SQL 查询数量断言",
+      "响应时间从 > 2s 降到 < 200ms"
+    ],
+    "changed_files": 5,
+    "diff_lines": 263,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-028",
+    "title": "连接池耗尽：高并发下数据库连接池 exhausted 导致级联失败",
+    "description": "应用使用 SQLAlchemy 连接池（pool_size=20, max_overflow=10），在流量高峰时连接全部被占用，新请求报 TimeoutError。但监控显示数据库本身 CPU 只有 30%——连接池配置过小。但简单增大 pool_size 后，数据库连接数超过 max_connections 报错。需要综合方案：连接池配置优化、慢查询优化减少连接占用时间、PgBouncer 连接复用、连接池满时的 queue + 降级策略。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "deploy",
+      "prod"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/db/connection_pool.py",
+      "src/db/pool_config.py",
+      "src/middleware/connection_timeout.py",
+      "deploy/pgbouncer/pgbouncer.ini",
+      "src/monitoring/pool_metrics.py",
+      "tests/test_pool_exhaustion.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只调大 pool_size，未考虑数据库 max_connections 限制和多实例部署下的总连接数计算",
+    "known_pitfalls": [
+      "总连接数 = pool_size * instances * services，需要整体规划",
+      "PgBouncer 的 transaction pooling 模式与 prepared statements 不兼容",
+      "连接泄漏（未正确 close/return）是常见的隐藏原因——需要添加连接泄漏检测",
+      "pool_pre_ping 选项可检测死连接但增加一次 RTT",
+      "QueuePool 的 timeout 设置影响用户体验——太短返回错误，太长阻塞请求"
+    ],
+    "verification_criteria": [
+      "连接池满时新请求排队而非立即失败",
+      "连接泄漏检测可发现未归还的连接",
+      "PgBouncer 正确配置并与应用连接池协同",
+      "监控指标包含连接池使用率、等待时间、借用次数",
+      "极端负载下系统优雅降级而非级联崩溃"
+    ],
+    "changed_files": 6,
+    "diff_lines": 246,
+    "cluster_id": "infra-deploy",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-029",
+    "title": "分布式锁竞争导致级联超时：Redis 分布式锁等待链过长",
+    "description": "多个服务使用 Redis 分布式锁协调库存扣减。在秒杀场景下，所有请求竞争同一个锁，锁持有时间 ~50ms，但 1000 个并发请求意味着最后一个请求需要等待 50s 才能获得锁。需要设计无锁或细粒度锁方案：(1) 将库存按分段拆分（如 10 个分段各 100 库存）(2) 请求随机分配到分段 (3) 分段不足时再触发全局锁合并库存。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "concurrency",
+      "performance",
+      "payment"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/services/inventory_service.py",
+      "src/cache/redis_lock.py",
+      "src/services/inventory_segment.py",
+      "src/tasks/inventory_rebalance.py",
+      "tests/test_inventory_concurrent.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只优化锁等待时间或增加重试，未从根本上解决单点锁瓶颈问题",
+    "known_pitfalls": [
+      "分段库存需要处理某分段不足但总库存充足的情况（触发再平衡）",
+      "再平衡过程本身需要全局锁，需要控制频率",
+      "分段数与并发量的关系需要动态调整",
+      "超卖防护：所有分段库存之和必须精确等于总库存",
+      "Lua 脚本保证分段扣减的原子性"
+    ],
+    "verification_criteria": [
+      "1000 并发秒杀 P99 < 500ms（原方案 50s）",
+      "无超卖（扣减库存 <= 实际库存）",
+      "分段库存之和始终等于总库存",
+      "分段不足时自动触发再平衡",
+      "监控指标包含分段竞争率和再平衡频率"
+    ],
+    "changed_files": 5,
+    "diff_lines": 259,
+    "cluster_id": "payment-validation",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-030",
+    "title": "内存泄漏排查：Python 服务内存持续增长 30MB/小时",
+    "description": "Python Web 服务在运行 48 小时后 OOM 重启。内存增长速率约 30MB/h。需要排查并修复内存泄漏。已知嫌疑点：(1) 全局 dict 缓存无 TTL (2) SQLAlchemy Session 未正确 close (3) asyncio Task 创建后未 await 导致引用无法释放 (4) 第三方库的 callback 注册累积。需要添加内存监控和泄漏检测机制。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "prod"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/cache/local_cache.py",
+      "src/db/session_manager.py",
+      "src/tasks/async_task_manager.py",
+      "src/monitoring/memory_profiler.py",
+      "src/middleware/memory_monitor.py",
+      "tests/test_memory_leak.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只修复一个泄漏点（如添加缓存 TTL），但多个泄漏点同时存在，只修一个不能完全解决问题",
+    "known_pitfalls": [
+      "gc.get_referrers() 排查循环引用但不能发现 C 扩展的泄漏",
+      "tracemalloc 的性能开销在生产环境可能不可接受——需要采样式监控",
+      "SQLAlchemy Session scope 与 request lifecycle 不一致是常见泄漏源",
+      "asyncio Task 引用链：Task -> coroutine -> frame -> local variables",
+      "修复后需要长时间运行测试验证（不是简单单元测试能覆盖的）"
+    ],
+    "verification_criteria": [
+      "48 小时运行内存增长 < 50MB（原 1.4GB）",
+      "所有缓存有 TTL 或 LRU 淘汰策略",
+      "每个请求结束后 Session 正确关闭",
+      "内存监控 endpoint /debug/memory 可用",
+      "内存超阈值时自动告警"
+    ],
+    "changed_files": 6,
+    "diff_lines": 219,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-031",
+    "title": "慢查询优化：报表查询 JOIN 5 张大表，执行时间 > 30 秒",
+    "description": "月度收入报表查询 JOIN orders(5000万)、order_items(2亿)、products(100万)、merchants(10万)、categories(1000) 五张表，按 category 分组统计，执行时间 > 30 秒。EXPLAIN 显示 orders 走了全表扫描。需要综合优化：创建覆盖索引、查询改写（用 CTE 或子查询替换多层 JOIN）、考虑预聚合物化视图、或拆分为多步查询。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/services/report_service.py",
+      "src/db/queries/revenue_report.sql",
+      "migrations/0054_revenue_report_indexes.py",
+      "src/tasks/refresh_revenue_materialized_view.py",
+      "tests/test_revenue_report_performance.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": false,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常只添加索引而不改写查询，或者创建物化视图但忘记定时刷新任务，导致数据过期",
+    "known_pitfalls": [
+      "覆盖索引需要包含 WHERE 条件和 GROUP BY 字段",
+      "物化视图刷新 (REFRESH MATERIALIZED VIEW CONCURRENTLY) 需要唯一索引",
+      "报表查询可能需要读副本以避免影响主库",
+      "按月分区可以减少扫描范围但需要改造表结构",
+      "查询计划在不同数据量下可能变化，需要用 pg_hint_plan 固定"
+    ],
+    "verification_criteria": [
+      "月度报表查询 < 2 秒",
+      "物化视图自动刷新（每小时或每天）",
+      "报表查询走读副本",
+      "EXPLAIN 确认走索引扫描",
+      "数据准确性与原始查询一致"
+    ],
+    "changed_files": 5,
+    "diff_lines": 187,
+    "cluster_id": "perf-optimization",
+    "repo_level": false,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-032",
+    "title": "异步任务队列积压：Celery worker 处理速度跟不上任务产生速度",
+    "description": "邮件发送任务通过 Celery 处理，高峰期积压 50000+ 任务，延迟超过 2 小时。当前配置：4 worker * 1 concurrency（同步执行）。需要：(1) 提高并发（使用 gevent/eventlet pool）(2) 按优先级分队列（交易邮件优先、营销邮件可延迟）(3) 任务限速（SMTP 限制 100 封/分钟）(4) 批量发送优化（合并同模板邮件）(5) 监控队列长度和延迟。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "deploy"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/tasks/email_tasks.py",
+      "src/tasks/celery_config.py",
+      "src/services/email_batch_service.py",
+      "src/monitoring/celery_metrics.py",
+      "deploy/celery/worker_config.yaml",
+      "tests/test_email_queue.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只增加 concurrency 但未考虑 SMTP 限速（导致被邮件服务商封禁），或者未实现优先级队列导致交易邮件延迟",
+    "known_pitfalls": [
+      "gevent pool 与某些数据库驱动不兼容（如 psycopg2 需要用 psycogreen 打补丁）",
+      "任务限速使用 Celery rate_limit 参数，但分布式环境下不精确",
+      "批量发送需要处理部分成功的情况（10 封中 3 封失败如何重试）",
+      "queue 优先级在 Redis broker 中实现方式与 RabbitMQ 不同",
+      "积压清理时不能简单 purge（会丢失交易邮件）"
+    ],
+    "verification_criteria": [
+      "高峰期邮件延迟 < 10 分钟（原 2 小时）",
+      "交易邮件优先级高于营销邮件",
+      "SMTP 发送速率不超过限制",
+      "队列长度和延迟有 Grafana dashboard 监控",
+      "积压时自动扩 worker（或告警人工扩容）"
+    ],
+    "changed_files": 6,
+    "diff_lines": 136,
+    "cluster_id": "infra-deploy",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-033",
+    "title": "提取公共服务层：6 个微服务中重复的用户信息查询逻辑统一",
+    "description": "订单服务、支付服务、通知服务、报表服务、审计服务、推荐服务都各自实现了用户信息查询逻辑（直连 user DB 或调 user API），版本不一致导致数据不同步（如订单服务缓存了旧地址，通知服务用了新地址）。需要提取为统一的 user-info SDK（Python 包），所有服务通过 SDK 获取用户信息，SDK 内部实现缓存、降级、版本一致性。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor",
+      "multi_service"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "packages/user-info-sdk/user_info_client.py",
+      "packages/user-info-sdk/cache_strategy.py",
+      "packages/user-info-sdk/setup.py",
+      "services/order/src/user_lookup.py",
+      "services/payment/src/user_lookup.py",
+      "services/notification/src/user_lookup.py",
+      "services/report/src/user_lookup.py",
+      "services/audit/src/user_lookup.py",
+      "services/recommendation/src/user_lookup.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只创建了 SDK 但未修改所有 6 个服务的调用方，或者 SDK 的缓存策略与各服务原有的缓存冲突（双层缓存问题）",
+    "known_pitfalls": [
+      "SDK 版本发布后 6 个服务需要逐步升级，不能一次性切换",
+      "各服务原有的 user 缓存需要在迁移后清除，避免双层缓存",
+      "SDK 需要支持同步和异步两种调用模式（部分服务是 async）",
+      "SDK 的错误处理需要与各服务的错误体系兼容",
+      "SDK 的日志不应与宿主服务的日志系统冲突"
+    ],
+    "verification_criteria": [
+      "所有 6 个服务通过 SDK 获取用户信息",
+      "SDK 缓存一致性：任何服务更新用户信息后其他服务在 5 秒内获取到新值",
+      "SDK 支持 sync 和 async 调用",
+      "SDK 发布为独立 Python 包，可通过 pip install 安装",
+      "各服务的旧 user_lookup 模块被删除"
+    ],
+    "changed_files": 9,
+    "diff_lines": 194,
+    "cluster_id": "refactor-architecture",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-034",
+    "title": "错误处理标准化：全局改造 4 种不同风格的异常处理为统一模式",
+    "description": "代码库中存在 4 种异常处理风格：(1) 返回 error dict (2) raise 自定义异常 (3) 返回 None + 日志 (4) 吞掉异常只打日志。需要统一为一种模式：所有业务错误用自定义异常类（带 error_code 和 user_message），在 API 层统一捕获转换为 HTTP 响应。需要逐模块改造，不破坏现有功能。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/exceptions/base.py",
+      "src/exceptions/business_errors.py",
+      "src/middleware/error_handler.py",
+      "src/services/order_service.py",
+      "src/services/payment_service.py",
+      "src/services/user_service.py",
+      "src/services/inventory_service.py",
+      "tests/test_error_handling.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型定义了异常类和 error_handler 但只改造了一两个 service，其他 service 仍使用旧模式；或者在改造过程中改变了错误处理的语义（如原来吞掉的异常现在抛出导致未预期的 500）",
+    "known_pitfalls": [
+      "原来返回 None 的方法，调用方可能依赖 None 判断——改为抛异常后调用方也要改",
+      "被吞掉的异常可能是有意为之（non-critical path），不能盲目改为抛出",
+      "error_code 需要全局唯一且有文档化的编码规范",
+      "国际化：user_message 需要支持多语言（通过 error_code 映射）",
+      "改造过程需要逐模块进行，每改一个模块跑全部测试"
+    ],
+    "verification_criteria": [
+      "所有 service 方法使用自定义异常（无 bare except 或 return None 模式）",
+      "API 层统一返回 {error_code, message, details} 格式",
+      "所有 error_code 有文档化的含义",
+      "现有 API 的 HTTP 状态码不变",
+      "日志中包含异常堆栈和上下文信息"
+    ],
+    "changed_files": 8,
+    "diff_lines": 230,
+    "cluster_id": "refactor-architecture",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-035",
+    "title": "日志格式统一：从 plain text 迁移到 structured JSON log 不影响现有日志解析",
+    "description": "当前日志为 plain text 格式（各模块格式不一致），Elasticsearch 解析规则硬编码了多种 grok pattern。需要统一为 JSON 格式日志（方便 ELK 解析），但迁移过程中需要：(1) 不中断现有 Kibana dashboard (2) 支持同时输出两种格式过渡 (3) 旧格式日志的 grok pattern 保留到迁移完成。涉及 20+ 个模块的 logger 配置修改。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor",
+      "deploy"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/logging/json_formatter.py",
+      "src/logging/dual_formatter.py",
+      "src/logging/logging_config.py",
+      "src/logging/context_injector.py",
+      "deploy/logstash/pipeline.conf",
+      "deploy/kibana/dashboard_export.json",
+      "tests/test_log_format.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接切换 formatter 为 JSON，导致 Kibana 上的 grok pattern 无法解析新格式，dashboard 全部失效",
+    "known_pitfalls": [
+      "过渡期需要 dual formatter 同时输出两种格式（或 logstash 同时支持两种解析）",
+      "JSON log 中的 extra fields 需要标准化（request_id, user_id, tenant_id 等）",
+      "multiline log（如 traceback）在 JSON 模式下需要特殊处理",
+      "log level 的字符串表示需要统一（INFO vs info vs 20）",
+      "performance：JSON 序列化比 plain text 慢，需要异步 handler"
+    ],
+    "verification_criteria": [
+      "新日志为 JSON 格式且包含标准字段",
+      "Kibana dashboard 在迁移过程中不中断",
+      "traceback 在 JSON log 中完整保留",
+      "日志性能：JSON formatter 延迟 < 1ms/条",
+      "迁移完成后旧格式可关闭（通过配置）"
+    ],
+    "changed_files": 7,
+    "diff_lines": 151,
+    "cluster_id": "infra-deploy",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-036",
+    "title": "配置中心迁移：从环境变量切换到 Consul KV 支持运行时热更新",
+    "description": "当前所有配置通过环境变量注入（修改需重新部署）。需要迁移到 Consul KV 支持运行时热更新，但需要：(1) 环境变量作为 fallback（Consul 不可用时）(2) 敏感配置仍走环境变量（不存 Consul）(3) 配置变更时触发回调（如连接池大小变更需重新初始化）(4) 配置版本追踪和回滚。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor",
+      "deploy",
+      "prod"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/config/config_manager.py",
+      "src/config/consul_client.py",
+      "src/config/config_watcher.py",
+      "src/config/config_schema.yaml",
+      "src/config/env_fallback.py",
+      "deploy/consul/config_init.sh",
+      "tests/test_config_hot_reload.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型实现了 Consul 客户端但忽略了 fallback 机制（Consul 不可用时服务无法启动），或者热更新回调未处理更新失败的回滚",
+    "known_pitfalls": [
+      "配置变更回调中的异常不应导致服务崩溃",
+      "Consul session 的 TTL 和 lock-delay 需要合理配置",
+      "敏感配置的分类标准需要明确（密码、API key 走环境变量；超时、并发数走 Consul）",
+      "热更新的验证需要 schema validation（防止无效配置导致运行时错误）",
+      "配置版本追踪需要与 Consul 的 ModifyIndex 对齐"
+    ],
+    "verification_criteria": [
+      "Consul 中修改配置后 5 秒内生效",
+      "Consul 不可用时使用环境变量 fallback",
+      "敏感配置不出现在 Consul 中",
+      "无效配置被拒绝（schema validation 失败返回错误）",
+      "配置变更有审计日志"
+    ],
+    "changed_files": 7,
+    "diff_lines": 81,
+    "cluster_id": "infra-deploy",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-037",
+    "title": "数据库 ORM 迁移：从 SQLAlchemy 切换到 asyncio-compatible 的 databases 库",
+    "description": "为了支持 async API（FastAPI），需要将数据库层从 SQLAlchemy ORM（同步）迁移到 SQLAlchemy Core + databases 库（异步）。涉及 40+ 个 model 类和 200+ 个查询。需要保持接口不变（所有 service 层调用不变），只改变底层实现。需要处理事务管理、连接池、lazy loading 不可用（异步不支持延迟加载）等问题。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor",
+      "data_integrity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/db/async_session.py",
+      "src/db/query_builder.py",
+      "src/models/base_model.py",
+      "src/services/user_service.py",
+      "src/services/order_service.py",
+      "src/middleware/db_middleware.py",
+      "tests/test_async_db.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型改造了少数 model 但未处理 lazy loading 的替代方案（异步 ORM 不支持属性访问时自动查询），导致大量运行时 MissingGreenlet 错误",
+    "known_pitfalls": [
+      "所有 relationship 的 lazy loading 需要改为 eager loading 或显式查询",
+      "事务管理需要从 session.begin() 改为 async with session.begin()",
+      "现有的 fixture 和 factory（test data）需要适配异步",
+      "数据库连接池需要使用 asyncio-native 的实现",
+      "迁移需要逐模块进行，短期内两种模式并存"
+    ],
+    "verification_criteria": [
+      "所有 API 端点异步执行",
+      "事务的 ACID 特性不变",
+      "现有测试全部通过（适配异步后）",
+      "性能：异步模式下吞吐量提升 > 50%",
+      "无 lazy loading 相关的运行时错误"
+    ],
+    "changed_files": 7,
+    "diff_lines": 274,
+    "cluster_id": "refactor-architecture",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-038",
+    "title": "单体拆分：从 monolith 提取支付模块为独立微服务",
+    "description": "支付相关代码（src/payment/）需要从单体应用中提取为独立微服务。涉及：(1) 抽取代码并处理对 monolith 其他模块的依赖 (2) 数据库表拆分（支付相关表迁移到独立数据库）(3) 接口替换（monolith 内部方法调用改为 HTTP/gRPC 调用）(4) 事务处理（原来的数据库事务需要改为分布式事务或 saga）。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor",
+      "payment",
+      "data_integrity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "services/payment/src/payment_service.py",
+      "services/payment/src/payment_api.py",
+      "src/clients/payment_client.py",
+      "src/services/order_service.py",
+      "src/services/refund_service.py",
+      "src/saga/payment_saga.py",
+      "scripts/split_payment_tables.py",
+      "tests/test_payment_integration.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只提取了代码和 API，忽略了数据库事务拆分——原来一个事务内的「创建订单 + 创建支付记录」现在跨两个数据库无法保证原子性",
+    "known_pitfalls": [
+      "Saga 模式的补偿事务设计（如支付成功但订单创建失败需要退款）",
+      "数据库拆分期间需要双写（monolith 和 payment service 同时写），保证一致性",
+      "支付服务的可用性要求高于 monolith，需要独立的 SLA 和监控",
+      "事件驱动通信引入最终一致性，对用户体验的影响需评估",
+      "原来通过数据库 JOIN 的查询需要改为 API 调用 + 应用层 JOIN"
+    ],
+    "verification_criteria": [
+      "支付模块作为独立服务运行",
+      "monolith 通过 HTTP 调用支付服务",
+      "saga 正确处理部分失败场景",
+      "数据一致性：订单和支付记录最终一致",
+      "支付服务独立可部署、可回滚"
+    ],
+    "changed_files": 8,
+    "diff_lines": 120,
+    "cluster_id": "payment-validation",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-039",
+    "title": "依赖注入改造：消除全局状态依赖，支持单元测试隔离",
+    "description": "代码库中大量使用全局单例（如 db = Database(), cache = Redis(), mailer = SMTPClient()），导致单元测试无法 mock 这些依赖。需要引入 DI 容器，所有服务通过构造函数注入依赖。但需要保持向后兼容（现有代码逐步迁移，不能一次改完）。需要设计 DI 容器、修改 service 层构造函数、更新测试用的 fixture。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/di/container.py",
+      "src/di/providers.py",
+      "src/services/user_service.py",
+      "src/services/order_service.py",
+      "src/services/payment_service.py",
+      "src/api/dependencies.py",
+      "tests/conftest.py",
+      "tests/test_di_container.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型实现了 DI 容器但只改造了少数 service，且全局单例仍然存在（两套系统共存增加了复杂性而非简化）",
+    "known_pitfalls": [
+      "DI 容器不应引入过多框架魔法——FastAPI 的 Depends 已经是 DI",
+      "向后兼容：全局单例保留为 DI 容器的 default binding，逐步替换",
+      "循环依赖需要在 DI 层面用 lazy provider 解决",
+      "测试 fixture 需要提供 override 机制（container.override(Database, mock_db)）",
+      "scope 管理：request scope vs singleton scope 的生命周期"
+    ],
+    "verification_criteria": [
+      "核心 service 通过 DI 注入依赖",
+      "测试中可以 mock 所有外部依赖",
+      "现有代码不受影响（全局单例保留为 fallback）",
+      "无循环依赖导致的启动失败",
+      "DI 容器初始化时间 < 100ms"
+    ],
+    "changed_files": 8,
+    "diff_lines": 258,
+    "cluster_id": "refactor-architecture",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-040",
+    "title": "国际化改造：硬编码中文字符串提取为 i18n 资源文件",
+    "description": "代码库中散布着 500+ 处硬编码的中文字符串（错误消息、邮件模板、通知文案等），需要提取为 i18n 资源文件支持中英双语。涉及：(1) 扫描并提取所有硬编码字符串 (2) 生成 message key 映射 (3) 在代码中替换为 i18n 函数调用 (4) 创建中英文翻译文件。需要处理带参数的字符串（如「用户 {name} 已被禁用」）。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "refactor"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "src/i18n/translator.py",
+      "src/i18n/locale_middleware.py",
+      "locales/zh_CN.json",
+      "locales/en_US.json",
+      "scripts/extract_i18n_strings.py",
+      "src/services/user_service.py",
+      "src/services/notification_service.py",
+      "src/templates/email_templates.py",
+      "tests/test_i18n.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型用正则提取字符串但漏掉了 f-string 和字符串拼接中的中文，或者提取后的 message key 命名混乱无法维护",
+    "known_pitfalls": [
+      "f-string 中的中文需要特殊处理（提取时保留 placeholder）",
+      "邮件模板中的 HTML + 中文混合需要用模板引擎的 i18n 支持",
+      "数据库中的枚举值（如状态名称）不应走 i18n（它们是数据不是 UI 文本）",
+      "message key 的命名规范需要统一（如 module.function.context）",
+      "需要 CI 检查新增代码中的硬编码字符串（lint 规则）"
+    ],
+    "verification_criteria": [
+      "无硬编码中文字符串（CI lint 通过）",
+      "切换 locale 后所有 UI 文本显示对应语言",
+      "带参数的字符串正确格式化",
+      "翻译缺失时 fallback 到默认语言而非报错",
+      "新增 200+ 个 i18n key 有文档化的含义"
+    ],
+    "changed_files": 9,
+    "diff_lines": 188,
+    "cluster_id": "refactor-architecture",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-041",
+    "title": "需求歧义：「支持多租户」但未定义隔离级别和资源共享策略",
+    "description": "产品需求只写了「系统需要支持多租户」。但未说明：(1) 数据隔离级别（共享 DB 共享 schema？共享 DB 独立 schema？独立 DB？）(2) 计算资源隔离（共享还是独立 worker pool？）(3) 租户间是否可以共享数据（如公共模板）(4) 租户配额如何计量。需要先识别歧义并给出多种方案的 trade-off 分析，然后选择一种实现。",
+    "category": "refactor",
+    "difficulty": "hard",
+    "risk_tags": [
+      "tenant",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/multi_tenant_design.md",
+      "src/middleware/tenant_context.py",
+      "src/db/tenant_aware_query.py",
+      "src/config/tenant_config.py",
+      "tests/test_tenant_isolation.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接选择最简单的方案（shared table + tenant_id 过滤）但不分析 trade-off，且遗漏了计算资源隔离和配额管理",
+    "known_pitfalls": [
+      "shared table 方案的所有查询都需要 WHERE tenant_id = ?，遗漏一处即数据泄漏",
+      "需要处理「系统级数据」不属于任何租户的情况",
+      "管理员用户可能跨租户操作，需要特殊处理",
+      "租户间的数据迁移（如公司合并、拆分）需要提前考虑",
+      "性能：大租户的数据量可能远超小租户，需要分片或分区策略"
+    ],
+    "verification_criteria": [
+      "有明确的多租户设计文档（包含 trade-off 分析）",
+      "选定方案的数据隔离无泄漏",
+      "系统级数据所有租户可见",
+      "管理员跨租户操作有审计日志",
+      "租户级别的资源配额可配置"
+    ],
+    "changed_files": 5,
+    "diff_lines": 167,
+    "cluster_id": "requirement-analysis",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-042",
+    "title": "需求歧义：「提高搜索性能」但未给具体 SLA 指标和数据规模",
+    "description": "产品需求说「搜索太慢，需要提高性能」。但未说明：(1) 当前 P50/P95/P99 是多少，目标是多少 (2) 搜索的数据规模（100 万 vs 1 亿条）(3) 是否允许引入 Elasticsearch 等新基础设施 (4) 搜索结果是否可以有延迟（近实时 vs 实时）(5) 是否需要支持模糊搜索、全文搜索。需要先与利益相关方澄清需求边界再实施。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/search_performance_proposal.md",
+      "src/services/search_service.py",
+      "src/search/index_strategy.py",
+      "src/search/query_optimizer.py",
+      "tests/test_search_performance.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接引入 Elasticsearch 但未评估是否真的需要——也许 PostgreSQL GIN 索引就足够了，过度设计增加了运维成本",
+    "known_pitfalls": [
+      "没有明确 SLA 的优化可能过度或不足",
+      "引入 ES 的运维成本、数据同步复杂度需要评估",
+      "LIKE '%keyword%' 查询无法用 B-tree 索引——需要 trigram 索引或全文搜索",
+      "搜索质量（相关性排序）可能比速度更重要但需求中未提及",
+      "需要 benchmark 当前性能作为 baseline"
+    ],
+    "verification_criteria": [
+      "有性能 baseline 数据（当前 P50/P95/P99）",
+      "有明确的目标 SLA（经沟通确认）",
+      "方案选择有成本效益分析",
+      "实施后达到目标 SLA",
+      "有持续的性能监控"
+    ],
+    "changed_files": 5,
+    "diff_lines": 151,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-043",
+    "title": "需求歧义：「兼容旧版本」但未说明向后兼容到哪个版本",
+    "description": "重构用户 API 的需求说「需要兼容旧版本客户端」。但未说明：(1) 最早需要兼容到哪个版本（v1? v2? v3?）(2) 兼容到什么程度（字段兼容？行为兼容？错误码兼容？）(3) 旧版本的 deprecation 时间表 (4) 是否允许返回 warning header 提醒升级。各客户端团队对兼容性的理解不同。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "backward_compat",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/api_compatibility_policy.md",
+      "src/api/version_negotiation.py",
+      "src/api/v1_compat_layer.py",
+      "src/api/v2_compat_layer.py",
+      "src/middleware/version_warning.py",
+      "tests/test_api_backward_compat.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型为所有历史版本都做了兼容层，导致代码极度复杂；或者只兼容了字段格式但改变了错误码，导致客户端解析失败",
+    "known_pitfalls": [
+      "字段兼容容易做到，但行为兼容很难（如排序规则变更、默认值变更）",
+      "错误码兼容经常被遗漏——旧版本客户端依赖错误码做逻辑判断",
+      "兼容层如果不设 sunset 日期会永远维护下去",
+      "版本协商机制（Accept-Version header vs URL path）需要统一",
+      "强制升级的灰度策略——不能一刀切拒绝旧版本"
+    ],
+    "verification_criteria": [
+      "有明确的兼容性策略文档",
+      "兼容层覆盖字段、行为、错误码三个维度",
+      "有 deprecation 时间表",
+      "旧版本请求返回 Sunset/Deprecation 响应头",
+      "兼容性测试用例覆盖 v1/v2/v3 的差异"
+    ],
+    "changed_files": 6,
+    "diff_lines": 119,
+    "cluster_id": "requirement-analysis",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-044",
+    "title": "需求矛盾：安全团队要求 MFA 强制开启 vs 产品团队要求简化登录流程",
+    "description": "安全团队要求所有用户必须开启 MFA（多因素认证），拒绝仅密码登录。产品团队发现 MFA 强制后注册转化率下降 30%，要求取消强制。两个团队各自有正当理由且优先级相同。需要设计折中方案：分场景 MFA（管理员强制、普通用户可选但高风险操作时强制）、渐进式 MFA 引导、风险自适应 MFA（异常登录时才要求）。",
+    "category": "auth",
+    "difficulty": "hard",
+    "risk_tags": [
+      "auth",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/adaptive_mfa_proposal.md",
+      "src/auth/mfa_policy.py",
+      "src/auth/risk_evaluator.py",
+      "src/auth/login_handler.py",
+      "src/config/mfa_settings.yaml",
+      "tests/test_adaptive_mfa.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型通常选择一方的需求实现，而非设计折中方案；或者折中方案过于复杂导致用户体验更差",
+    "known_pitfalls": [
+      "风险评估维度：IP 地理位置变化、设备指纹变化、异常时间登录、连续失败次数",
+      "渐进式引导需要记录用户的 MFA 设置进度（已提示几次、是否跳过）",
+      "管理员强制 MFA 的策略需要考虑恢复场景（手机丢失无法登录）",
+      "MFA 方式的多样性（TOTP、SMS、WebAuthn）影响实现复杂度",
+      "A/B 测试验证折中方案对转化率和安全性的影响"
+    ],
+    "verification_criteria": [
+      "管理员必须通过 MFA 登录",
+      "普通用户正常登录不要求 MFA",
+      "异常登录（新 IP、新设备）触发 MFA 挑战",
+      "高风险操作（改密码、绑定手机）强制 MFA",
+      "MFA 设置引导不阻塞注册流程",
+      "有方案 trade-off 文档"
+    ],
+    "changed_files": 6,
+    "diff_lines": 135,
+    "cluster_id": "requirement-analysis",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-045",
+    "title": "需求矛盾：GDPR 数据删除权 vs 财务审计保留要求",
+    "description": "GDPR 要求用户可以请求删除所有个人数据。但财务审计要求交易记录保留 7 年。当用户请求删除时：(1) 哪些数据可以删除、哪些必须保留？(2) 保留的数据如何匿名化？(3) 匿名化后是否还满足审计要求（如能否追溯到具体交易）？(4) 删除请求的处理 SLA 是多少？",
+    "category": "security",
+    "difficulty": "hard",
+    "risk_tags": [
+      "permission",
+      "data_integrity",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/gdpr_data_retention_policy.md",
+      "src/services/gdpr_deletion_service.py",
+      "src/services/data_anonymizer.py",
+      "src/models/audit_trail.py",
+      "scripts/anonymize_user_data.py",
+      "tests/test_gdpr_deletion.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接删除用户所有数据或直接拒绝删除，未处理匿名化的中间方案；或者匿名化不彻底（如 email 只去掉了 @ 后面部分仍可识别）",
+    "known_pitfalls": [
+      "匿名化需要不可逆（hash 而非加密，且不保留原始数据）",
+      "关联数据的间接识别风险（如唯一金额 + 日期可反推用户身份）",
+      "删除请求需要在 30 天内完成（GDPR 要求）",
+      "备份中的数据也需要删除或标记（增加了复杂度）",
+      "匿名化后的数据需要法务确认满足审计要求"
+    ],
+    "verification_criteria": [
+      "有数据分类表（可删除 / 需匿名化 / 需保留）",
+      "匿名化后无法通过数据反推用户身份",
+      "匿名化后的交易记录仍有审计价值",
+      "删除请求在 30 天内完成处理",
+      "有法律合规审查记录"
+    ],
+    "changed_files": 6,
+    "diff_lines": 275,
+    "cluster_id": "auth-permission",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-046",
+    "title": "需求矛盾：运营要求实时数据 vs 工程要求最终一致性",
+    "description": "运营报表需要「实时数据」——看到的数据是最新的。但系统使用事件驱动架构，数据在多个服务间异步传播，天然有 1-5 秒延迟。运营团队在做促销活动时需要实时看到销售数据做决策。需要在不改变架构的前提下，为特定场景提供「近实时」数据方案（如直接查主库、CQRS 读模型、预计算 + 增量更新）。",
+    "category": "performance",
+    "difficulty": "hard",
+    "risk_tags": [
+      "performance",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/realtime_reporting_proposal.md",
+      "src/services/realtime_dashboard_service.py",
+      "src/cqrs/read_model_updater.py",
+      "src/cqrs/materialized_view_refresher.py",
+      "src/api/dashboard_endpoint.py",
+      "tests/test_realtime_dashboard.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型直接让报表查主库，导致大查询影响主库性能；或者实现了 CQRS 但读模型更新也有延迟，未真正解决问题",
+    "known_pitfalls": [
+      "直接查主库需要严格的查询优化和限制（只允许特定查询、有 timeout）",
+      "CQRS 读模型的更新延迟取决于事件消费速度",
+      "预计算 + 增量更新需要处理事件乱序问题",
+      "运营定义的「实时」可能只是「比现在快」——需要澄清具体 SLA（如 < 10 秒）",
+      "促销高峰期查询量激增，读模型可能需要独立扩容"
+    ],
+    "verification_criteria": [
+      "有「实时」的明确定义（延迟 SLA）",
+      "Dashboard 数据延迟 < 10 秒",
+      "报表查询不影响主库性能",
+      "促销高峰期 dashboard 仍可用",
+      "方案的成本和复杂度有评估文档"
+    ],
+    "changed_files": 6,
+    "diff_lines": 166,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-047",
+    "title": "需求歧义：「系统要支持导出」但未定义数据量、格式和时效要求",
+    "description": "需求只写「用户可以导出订单数据」。但未说明：(1) 导出格式（CSV? Excel? JSON?）(2) 数据量限制（全量导出 100 万条？）(3) 导出是同步还是异步（大数据量需要异步 + 通知）(4) 导出文件的存储和过期策略 (5) 敏感字段是否脱敏。需要先定义完整的导出需求规格。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "api",
+      "requirement_ambiguity",
+      "performance"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/export_spec.md",
+      "src/services/export_service.py",
+      "src/services/export_task.py",
+      "src/storage/export_file_manager.py",
+      "src/api/export_endpoint.py",
+      "tests/test_export_service.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": false,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型实现同步 CSV 导出，大数据量下超时或 OOM；或者实现了异步导出但没有文件过期清理，存储空间持续增长",
+    "known_pitfalls": [
+      "100 万条数据的 CSV 生成需要流式写入，不能全部加载到内存",
+      "Excel 格式有 104 万行限制，超过需要分 sheet 或分文件",
+      "异步导出需要通知机制（邮件、站内信、WebSocket push）",
+      "导出文件包含用户数据，存储需要加密，链接需要签名 + 过期",
+      "并发导出限制——一个用户同时发起 100 个导出任务会耗尽资源"
+    ],
+    "verification_criteria": [
+      "有完整的导出需求规格文档",
+      "小数据量（< 1000 条）同步返回",
+      "大数据量异步处理 + 通知",
+      "导出文件有过期清理",
+      "敏感字段脱敏可配置"
+    ],
+    "changed_files": 6,
+    "diff_lines": 106,
+    "cluster_id": "perf-optimization",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-048",
+    "title": "需求歧义：计费按量付费的计量粒度和账单周期未定义",
+    "description": "产品要实现「按 API 调用量计费」，但未说明：(1) 计量粒度（每次调用? 每分钟聚合? 每天聚合?）(2) 计费周期（实时扣费? 日结? 月结?）(3) 欠费处理（立即停服? 宽限期?）(4) 免费额度如何扣减 (5) 计量精度（偶尔丢 1-2 次调用是否可接受?）。不同的选择导致架构差异巨大。",
+    "category": "api",
+    "difficulty": "hard",
+    "risk_tags": [
+      "payment",
+      "requirement_ambiguity"
+    ],
+    "change_type": "logic_change",
+    "files_involved": [
+      "docs/rfc/usage_billing_design.md",
+      "src/billing/usage_meter.py",
+      "src/billing/billing_aggregator.py",
+      "src/billing/quota_checker.py",
+      "src/middleware/usage_tracking.py",
+      "tests/test_usage_billing.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": true,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型实现同步计量（每次 API 调用查 DB 检查配额），导致严重的性能问题；或者异步计量但精度不够导致超额使用",
+    "known_pitfalls": [
+      "实时计量需要高性能计数器（Redis INCR 或内存计数 + 周期性同步）",
+      "计量不精确时的 over-billing 和 under-billing 都有风险",
+      "月结账单需要精确的时间窗口计算（时区、跨月调用）",
+      "免费额度的扣减顺序（先扣免费额度还是先扣付费额度）影响用户体验",
+      "计量数据的存储量很大，需要聚合和归档策略"
+    ],
+    "verification_criteria": [
+      "有明确的计量粒度和精度要求文档",
+      "计量误差 < 0.1%",
+      "计费周期和账单格式已定义",
+      "欠费处理策略已明确并实现",
+      "免费额度扣减逻辑正确"
+    ],
+    "changed_files": 6,
+    "diff_lines": 103,
+    "cluster_id": "payment-validation",
+    "repo_level": true,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-049",
+    "title": "Kubernetes 部署：StatefulSet 滚动更新导致数据库连接风暴",
+    "description": "应用部署在 Kubernetes StatefulSet 上（6 个 Pod），滚动更新时每个新 Pod 启动时会创建连接池（20 连接）。但 readinessProbe 在 DB 连接建立前就通过了（检查的是 HTTP 端点），导致流量在连接池未就绪时打入，返回 503。同时旧 Pod 优雅关闭期间连接断开导致正在处理的请求失败。需要重新设计健康检查和 graceful shutdown。",
+    "category": "deploy",
+    "difficulty": "hard",
+    "risk_tags": [
+      "deploy",
+      "prod"
+    ],
+    "change_type": "infra_change",
+    "files_involved": [
+      "deploy/k8s/statefulset.yaml",
+      "deploy/k8s/readiness_probe.py",
+      "src/health/deep_health_check.py",
+      "src/lifecycle/graceful_shutdown.py",
+      "src/db/connection_warmup.py",
+      "tests/test_rolling_update.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": false,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型只修改了 readinessProbe 检查 DB 连接，但未实现连接预热和优雅关闭（drainConnections + SIGTERM handler）",
+    "known_pitfalls": [
+      "readinessProbe 检查 DB 连接会增加探测失败率（DB 短暂不可用导致 Pod 被移出服务）",
+      "deep health check 需要区分 startup/readiness/liveness 三种场景",
+      "graceful shutdown 需要：停止接收新请求 -> 等待进行中请求完成 -> 关闭连接池 -> 退出",
+      "terminationGracePeriodSeconds 需要大于最长请求处理时间",
+      "连接预热不应阻塞 Pod 启动过程太久"
+    ],
+    "verification_criteria": [
+      "滚动更新期间零 503 错误",
+      "readinessProbe 确认 DB 连接就绪后才接收流量",
+      "graceful shutdown 等待所有请求完成",
+      "连接预热在 Pod 就绪前完成",
+      "整个滚动更新过程 < 5 分钟"
+    ],
+    "changed_files": 6,
+    "diff_lines": 177,
+    "cluster_id": "infra-deploy",
+    "repo_level": false,
+    "expected_resolved": "true"
+  },
+  {
+    "task_id": "HS-050",
+    "title": "CI/CD 流水线安全：构建日志泄漏数据库密码和 API 密钥",
+    "description": "CI 构建日志中出现了明文数据库密码和第三方 API 密钥。原因：(1) docker build 时 --build-arg 传入密码（可见于 docker history）(2) 测试脚本 echo $DB_PASSWORD 用于调试但未移除 (3) pip install 时 requirements.txt 中包含私有 pypi 仓库的 token。需要全面排查和修复所有泄漏路径，并建立防止未来泄漏的机制。",
+    "category": "security",
+    "difficulty": "hard",
+    "risk_tags": [
+      "secret",
+      "deploy"
+    ],
+    "change_type": "infra_change",
+    "files_involved": [
+      "Dockerfile",
+      ".github/workflows/ci.yaml",
+      "scripts/run_tests.sh",
+      "requirements.txt",
+      ".pre-commit-config.yaml",
+      "deploy/docker/docker-compose.yaml",
+      "tests/conftest.py"
+    ],
+    "multi_file": true,
+    "repo_level_understanding": true,
+    "requirement_ambiguity": false,
+    "high_risk_domain": true,
+    "expected_tier": 3,
+    "baseline_expected_fail_reason": "单模型修复了 docker build-arg 问题但遗漏了 pip requirements 中的 token 和测试脚本中的 echo；或者使用了 Docker 多阶段构建但 secret 仍在中间层可见",
+    "known_pitfalls": [
+      "Docker BuildKit 的 --secret mount 是正确方案但需要 BuildKit 支持",
+      "CI 日志中的密码需要 mask（GitHub Actions 的 ::add-mask::）",
+      "requirements.txt 中的私有仓库 token 应使用 .netrc 或 pip.conf",
+      "历史构建日志中已经泄漏的密钥需要立即轮换",
+      "pre-commit hook 添加密钥扫描（如 detect-secrets、gitleaks）防止未来泄漏"
+    ],
+    "verification_criteria": [
+      "CI 构建日志中无任何明文密钥",
+      "Docker image 的 history 中无密钥",
+      "已泄漏的密钥全部轮换",
+      "pre-commit 密钥扫描生效",
+      "有密钥管理的操作规范文档"
+    ],
+    "changed_files": 7,
+    "diff_lines": 104,
+    "cluster_id": "infra-deploy",
+    "repo_level": true,
+    "expected_resolved": "true"
+  }
+]
