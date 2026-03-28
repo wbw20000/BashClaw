@@ -944,11 +944,11 @@ git commit -m "feat: BashClaw Phase 1 complete — SQLite store, stats, hooks, i
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR | 5 proposals, 5 accepted, 0 deferred |
-| Codex Review | `/codex review` | Independent 2nd opinion | 2 | ISSUES_FOUND | 15 findings (outside voice) |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | ISSUES_OPEN | 12 issues, 2 critical gaps |
+| Codex Review | `/codex review` | Independent 2nd opinion | 3 | ISSUES_FOUND | 8 findings (outside voice, GPT-5.4) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 3 | CLEAN | 0 issues, 0 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 
-**CODEX:** 15 structural concerns raised — most substantive: three truth sources divergence, hooks as hostile default, security/privacy absent
-**CROSS-MODEL:** 8 tension points analyzed. Agreement on 5, partial agreement on 3. Pre-push behavior changed from BLOCK to WARN per Codex recommendation.
-**UNRESOLVED:** 0 (all decisions made autonomously per user instruction)
-**VERDICT:** CEO CLEARED + ENG ISSUES_OPEN (12 TODOs identified, 2 critical gaps). Ready to implement fixes.
+**CODEX:** 8 findings on security hardening commit. 4 actionable (pre-existing issues), 2 partial agreement, 2 disagreement.
+**CROSS-MODEL:** Agreement on 4 findings, partial on 2, disagreement on 2. Hook graceful exit and empty-conv-on-import are design choices, not bugs.
+**UNRESOLVED:** 0
+**VERDICT:** CEO + ENG CLEARED. 4 non-blocking TODOs from Codex outside voice (numeric validation, push-clear scope, chatgpt ordering, array encoding).

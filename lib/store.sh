@@ -108,6 +108,9 @@ store_card_get_field() {
 store_card_search() {
   local query="$1"
   local limit="${2:-10}"
+  # Validate limit as integer (SQL injection prevention for numeric params)
+  limit="${limit//[!0-9]/}"
+  [[ -z "${limit}" ]] && limit=10
 
   # Sanitize for FTS5: strip special operators, escape quotes, then OR-join terms
   local safe_query
@@ -135,6 +138,8 @@ SQL
 store_card_search_keyword() {
   local query="$1"
   local limit="${2:-10}"
+  limit="${limit//[!0-9]/}"
+  [[ -z "${limit}" ]] && limit=10
 
   local safe_query
   safe_query="$(_store_escape "${query}")"
@@ -180,6 +185,8 @@ store_message_insert() {
   local role="$2"
   local content="$3"
   local seq="${4:-0}"
+  seq="${seq//[!0-9]/}"
+  [[ -z "${seq}" ]] && seq=0
 
   local msg_id
   msg_id="$(_store_gen_id "MG-")"
