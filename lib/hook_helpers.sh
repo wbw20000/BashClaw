@@ -20,6 +20,7 @@ fi
 
 # Ensure commit_risk table exists
 _hook_ensure_schema() {
+  command -v sqlite3 &>/dev/null || return 1
   local db="${BASHCLAW_DB:-}"
   [[ -f "${db}" ]] || return 1
 
@@ -43,9 +44,17 @@ hook_tag_commit() {
 
   _hook_ensure_schema || return 1
 
+  # Validate commit hash format
+  if ! [[ "${commit_hash}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    echo "ERROR: Invalid commit hash" >&2
+    return 1
+  fi
+
+  local safe_tags
+  safe_tags="$(echo "${risk_tags}" | sed "s/'/''/g")"
   sqlite3 "${BASHCLAW_DB}" <<SQL
 INSERT OR REPLACE INTO commit_risk (commit_hash, risk_level, risk_tags)
-VALUES ('${commit_hash}', '${risk_level}', '$(echo "${risk_tags}" | sed "s/'/''/g")');
+VALUES ('${commit_hash}', '${risk_level}', '${safe_tags}');
 SQL
 }
 
@@ -68,9 +77,16 @@ hook_clear_pushed_commits() {
 
 # Classify commit risk from diff
 # Args: commit_hash
-# Output: risk_level (low/medium/high)
+# Output: risk_level|tags_json (e.g. "medium|["auth","token"]")
 hook_classify_commit() {
   local commit_hash="$1"
+
+  # Validate commit hash format (hex only, 7-40 chars)
+  if ! [[ "${commit_hash}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    echo "ERROR: Invalid commit hash: ${commit_hash}" >&2
+    return 1
+  fi
+
   local diff_content
   diff_content=$(git diff "${commit_hash}^" "${commit_hash}" 2>/dev/null) || diff_content=""
 
@@ -91,17 +107,20 @@ hook_classify_commit() {
     risk_level="medium"
   fi
 
-  # Build tags JSON
+  # Build tags JSON safely using printf
   local tags_json="[]"
   if [[ ${#found_tags[@]} -gt 0 ]]; then
-    tags_json="["
-    local first=true
-    for t in "${found_tags[@]}"; do
-      ${first} || tags_json="${tags_json},"
-      tags_json="${tags_json}\"${t}\""
-      first=false
-    done
-    tags_json="${tags_json}]"
+    tags_json=$(printf '%s\n' "${found_tags[@]}" | jq -R . 2>/dev/null | jq -s . 2>/dev/null) || {
+      # Fallback if jq unavailable
+      tags_json="["
+      local first=true
+      for t in "${found_tags[@]}"; do
+        ${first} || tags_json="${tags_json},"
+        tags_json="${tags_json}\"${t}\""
+        first=false
+      done
+      tags_json="${tags_json}]"
+    }
   fi
 
   echo "${risk_level}|${tags_json}"

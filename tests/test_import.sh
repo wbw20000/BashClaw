@@ -61,8 +61,40 @@ EOF
   assert_eq "1" "${count}" "Dispatch should route to claude-code importer"
 }
 
+test_import_claude_code_with_malformed_lines() {
+  _load_import
+  cat > "${TEST_TMP}/mixed.jsonl" <<'EOF'
+{"type":"human","text":"Valid line 1"}
+this is not json at all
+{"type":"assistant","text":"Valid line 2"}
+{"broken json
+{"type":"human","text":"Valid line 3"}
+EOF
+  local stderr_output
+  stderr_output=$(import_claude_code "${TEST_TMP}/mixed.jsonl" "Mixed session" 2>&1 >/dev/null) || true
+  local msg_count
+  msg_count=$(sqlite3 "${BASHCLAW_DB}" "SELECT COUNT(*) FROM messages")
+  assert_eq "3" "${msg_count}" "Should import 3 valid messages"
+  assert_contains "${stderr_output}" "WARNING" "Should warn about failed lines"
+}
+
+test_import_empty_file() {
+  _load_import
+  touch "${TEST_TMP}/empty.jsonl"
+  local conv_id
+  conv_id=$(import_claude_code "${TEST_TMP}/empty.jsonl" "Empty" 2>/dev/null)
+  [[ -n "${conv_id}" ]] || {
+    echo "Should create conversation even for empty file" >&2; return 1
+  }
+  local msg_count
+  msg_count=$(sqlite3 "${BASHCLAW_DB}" "SELECT COUNT(*) FROM messages")
+  assert_eq "0" "${msg_count}" "Empty file should produce 0 messages"
+}
+
 echo "== test_import.sh =="
 run_test test_import_claude_code_jsonl
 run_test test_import_chatgpt_json
 run_test test_import_dispatch_claude_code
+run_test test_import_claude_code_with_malformed_lines
+run_test test_import_empty_file
 print_report "test_import.sh"

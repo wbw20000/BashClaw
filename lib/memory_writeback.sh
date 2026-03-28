@@ -543,25 +543,63 @@ writeback_build_entry() {
   local tmp_file
   tmp_file="$(mktemp)"
 
-  cat > "${tmp_file}" <<EOF
+  # Use jq for safe JSON construction (handles quotes/newlines in values)
+  if command -v jq &>/dev/null; then
+    jq -n \
+      --arg decision_title "${decision_title}" \
+      --arg task_summary "${task_summary}" \
+      --arg applicable_scope "${applicable_scope}" \
+      --arg non_applicable_scope "${non_applicable_scope}" \
+      --arg final_decision "${final_decision}" \
+      --arg why "${why}" \
+      --argjson known_pitfalls "${pitfalls_json}" \
+      --arg validation_evidence "${validation_evidence}" \
+      --arg issue_type "${issue_type}" \
+      --argjson review_or_human_required "${review_or_human_required}" \
+      --argjson risk_tags "${risk_tags_json}" \
+      --arg changeType "${change_type}" \
+      --arg linked_issue "${linked_issue}" \
+      --arg linked_pr "${linked_pr}" \
+      --arg timestamp "${timestamp}" \
+      '{
+        decision_title: $decision_title,
+        task_summary: $task_summary,
+        applicable_scope: $applicable_scope,
+        non_applicable_scope: $non_applicable_scope,
+        final_decision: $final_decision,
+        why: $why,
+        known_pitfalls: $known_pitfalls,
+        validation_evidence: $validation_evidence,
+        issue_type: $issue_type,
+        review_or_human_required: $review_or_human_required,
+        risk_tags: $risk_tags,
+        changeType: $changeType,
+        linked_issue: $linked_issue,
+        linked_pr: $linked_pr,
+        timestamp: $timestamp
+      }' > "${tmp_file}"
+  else
+    # Fallback: basic escaping for heredoc
+    cat > "${tmp_file}" <<EOF
 {
-  "decision_title": "${decision_title}",
-  "task_summary": "${task_summary}",
-  "applicable_scope": "${applicable_scope}",
-  "non_applicable_scope": "${non_applicable_scope}",
-  "final_decision": "${final_decision}",
-  "why": "${why}",
+  "decision_title": "${decision_title//\"/\\\"}",
+  "task_summary": "${task_summary//\"/\\\"}",
+  "applicable_scope": "${applicable_scope//\"/\\\"}",
+  "non_applicable_scope": "${non_applicable_scope//\"/\\\"}",
+  "final_decision": "${final_decision//\"/\\\"}",
+  "why": "${why//\"/\\\"}",
   "known_pitfalls": ${pitfalls_json},
-  "validation_evidence": "${validation_evidence}",
-  "issue_type": "${issue_type}",
+  "validation_evidence": "${validation_evidence//\"/\\\"}",
+  "issue_type": "${issue_type//\"/\\\"}",
   "review_or_human_required": ${review_or_human_required},
   "risk_tags": ${risk_tags_json},
-  "changeType": "${change_type}",
-  "linked_issue": "${linked_issue}",
-  "linked_pr": "${linked_pr}",
+  "changeType": "${change_type//\"/\\\"}",
+  "linked_issue": "${linked_issue//\"/\\\"}",
+  "linked_pr": "${linked_pr//\"/\\\"}",
   "timestamp": "${timestamp}"
 }
 EOF
+  fi
 
   echo "${tmp_file}"
 }

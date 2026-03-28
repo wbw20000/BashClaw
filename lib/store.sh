@@ -15,12 +15,20 @@ _STORE_SH_LOADED=1
 BASHCLAW_ROOT="${BASHCLAW_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BASHCLAW_DB="${BASHCLAW_DB:-${BASHCLAW_ROOT}/.bashclaw/bashclaw.db}"
 
+# Allowed field names for store_card_get_field (SQL injection prevention)
+_STORE_CARD_FIELDS="id title scope decision why pitfalls evidence risk_tags issue_type change_type superseded_by merge_count created_at updated_at"
+
 # Check sqlite3 is available
 _store_check_sqlite() {
   if ! command -v sqlite3 &>/dev/null; then
     echo "ERROR: sqlite3 is required. Install it: https://sqlite.org/download.html" >&2
     return 1
   fi
+}
+
+# Escape single quotes for SQL string literals
+_store_escape() {
+  echo "$1" | sed "s/'/''/g"
 }
 
 # Run SQL against the BashClaw database
@@ -71,7 +79,7 @@ store_card_insert() {
 
   _store_sql <<SQL
 INSERT INTO cards (id, title, scope, decision, why, risk_tags, issue_type)
-VALUES ('${card_id}', '$(echo "${title}" | sed "s/'/''/g")', '$(echo "${scope}" | sed "s/'/''/g")', '$(echo "${decision}" | sed "s/'/''/g")', '$(echo "${why}" | sed "s/'/''/g")', '$(echo "${risk_tags}" | sed "s/'/''/g")', '$(echo "${issue_type}" | sed "s/'/''/g")');
+VALUES ('${card_id}', '$(_store_escape "${title}")', '$(_store_escape "${scope}")', '$(_store_escape "${decision}")', '$(_store_escape "${why}")', '$(_store_escape "${risk_tags}")', '$(_store_escape "${issue_type}")');
 SQL
 
   echo "${card_id}"
@@ -81,7 +89,16 @@ SQL
 store_card_get_field() {
   local card_id="$1"
   local field="$2"
-  _store_sql "SELECT ${field} FROM cards WHERE id='${card_id}'"
+
+  # Validate field against allowlist (SQL injection prevention)
+  if ! echo " ${_STORE_CARD_FIELDS} " | grep -q " ${field} "; then
+    echo "ERROR: Invalid field name: ${field}" >&2
+    return 1
+  fi
+
+  local safe_id
+  safe_id="$(_store_escape "${card_id}")"
+  _store_sql "SELECT ${field} FROM cards WHERE id='${safe_id}'"
 }
 
 # Search cards using FTS5
@@ -92,9 +109,16 @@ store_card_search() {
   local query="$1"
   local limit="${2:-10}"
 
-  # Convert space-separated terms to FTS5 OR query
+  # Sanitize for FTS5: strip special operators, escape quotes, then OR-join terms
   local safe_query
-  safe_query="$(echo "${query}" | sed "s/'/''/g" | tr -s ' ' | sed 's/ / OR /g')"
+  safe_query="$(echo "${query}" | sed 's/[\"()*^]//g' | sed "s/'/''/g" | tr -s ' ')"
+  # Remove FTS5 boolean keywords that could break the query
+  safe_query="$(echo " ${safe_query} " | sed 's/ AND / /gi; s/ OR / /gi; s/ NOT / /gi; s/ NEAR / /gi' | tr -s ' ' | sed 's/^ //; s/ $//')"
+  # Join remaining terms with OR
+  safe_query="$(echo "${safe_query}" | sed 's/ / OR /g')"
+
+  # Bail out if query is empty after sanitization
+  [[ -z "${safe_query}" ]] && { echo "[]"; return 0; }
 
   _store_sql -json <<SQL
 SELECT c.id, c.title, c.scope, c.decision, c.why, c.pitfalls, c.risk_tags, c.issue_type
@@ -113,7 +137,7 @@ store_card_search_keyword() {
   local limit="${2:-10}"
 
   local safe_query
-  safe_query="$(echo "${query}" | sed "s/'/''/g")"
+  safe_query="$(_store_escape "${query}")"
 
   _store_sql -json <<SQL
 SELECT id, title, scope, decision, why, pitfalls, risk_tags, issue_type
@@ -142,7 +166,7 @@ store_conversation_insert() {
 
   _store_sql <<SQL
 INSERT INTO conversations (id, source, title, external_id)
-VALUES ('${conv_id}', '${source}', '$(echo "${title}" | sed "s/'/''/g")', '${external_id}');
+VALUES ('${conv_id}', '$(_store_escape "${source}")', '$(_store_escape "${title}")', '$(_store_escape "${external_id}")');
 SQL
 
   echo "${conv_id}"
@@ -162,8 +186,8 @@ store_message_insert() {
 
   _store_sql <<SQL
 INSERT INTO messages (id, conversation_id, role, content, seq)
-VALUES ('${msg_id}', '${conv_id}', '${role}', '$(echo "${content}" | sed "s/'/''/g")', ${seq});
-UPDATE conversations SET message_count = message_count + 1 WHERE id = '${conv_id}';
+VALUES ('${msg_id}', '$(_store_escape "${conv_id}")', '$(_store_escape "${role}")', '$(_store_escape "${content}")', ${seq});
+UPDATE conversations SET message_count = message_count + 1 WHERE id = '$(_store_escape "${conv_id}")';
 SQL
 
   echo "${msg_id}"
@@ -180,7 +204,7 @@ store_card_link_conversation() {
 
   _store_sql <<SQL
 INSERT OR IGNORE INTO card_sources (card_id, conversation_id, message_range)
-VALUES ('${card_id}', '${conv_id}', '${msg_range}');
+VALUES ('$(_store_escape "${card_id}")', '$(_store_escape "${conv_id}")', '$(_store_escape "${msg_range}")');
 SQL
 }
 
@@ -218,6 +242,10 @@ store_seed_import() {
 ###############################################################################
 
 store_stats() {
+  if ! command -v sqlite3 &>/dev/null || [[ ! -f "${BASHCLAW_DB}" ]]; then
+    echo '[{"active_cards":0,"superseded_cards":0,"total_conversations":0,"total_messages":0,"source_count":0}]'
+    return 0
+  fi
   _store_sql -json <<SQL
 SELECT
   (SELECT COUNT(*) FROM cards WHERE superseded_by IS NULL) as active_cards,

@@ -8,6 +8,9 @@
 BASHCLAW_ROOT="${BASHCLAW_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 export PATH="/c/sqlite:${PATH}"
 
+# Graceful exit if sqlite3 not available
+command -v sqlite3 &>/dev/null || exit 0
+
 # Only run if BashClaw is initialized
 [[ -f "${BASHCLAW_ROOT}/.bashclaw/bashclaw.db" ]] || exit 0
 

@@ -47,11 +47,18 @@ import_claude_code() {
   conv_id=$(store_conversation_insert "claude_code" "${title}" "")
 
   local seq=0
+  local error_count=0
   while IFS= read -r line; do
     [[ -z "${line}" ]] && continue
     local msg_type msg_text role
-    msg_type=$(echo "${line}" | jq -r '.type // ""' 2>/dev/null) || continue
-    msg_text=$(echo "${line}" | jq -r '.text // ""' 2>/dev/null) || continue
+    msg_type=$(echo "${line}" | jq -r '.type // ""' 2>/dev/null) || {
+      error_count=$((error_count + 1))
+      continue
+    }
+    msg_text=$(echo "${line}" | jq -r '.text // ""' 2>/dev/null) || {
+      error_count=$((error_count + 1))
+      continue
+    }
 
     case "${msg_type}" in
       human|user) role="user" ;;
@@ -65,6 +72,9 @@ import_claude_code() {
     seq=$((seq + 1))
   done < "${file_path}"
 
+  if [[ ${error_count} -gt 0 ]]; then
+    echo "WARNING: ${error_count} line(s) failed to parse in ${file_path}" >&2
+  fi
   echo "${conv_id}"
 }
 
@@ -96,18 +106,32 @@ import_chatgpt() {
 
   # Extract messages from mapping, filter nulls, sort by order if possible
   local seq=0
+  local error_count=0
+  local skip_count=0
   while IFS= read -r msg_json; do
     [[ -z "${msg_json}" || "${msg_json}" == "null" ]] && continue
     local role content
-    role=$(echo "${msg_json}" | jq -r '.message.author.role // ""' 2>/dev/null) || continue
-    content=$(echo "${msg_json}" | jq -r '.message.content.parts[0] // ""' 2>/dev/null) || continue
+    role=$(echo "${msg_json}" | jq -r '.message.author.role // ""' 2>/dev/null) || {
+      error_count=$((error_count + 1))
+      continue
+    }
+    content=$(echo "${msg_json}" | jq -r '.message.content.parts[0] // ""' 2>/dev/null) || {
+      error_count=$((error_count + 1))
+      continue
+    }
 
-    [[ -z "${role}" || -z "${content}" ]] && continue
+    if [[ -z "${role}" || -z "${content}" ]]; then
+      skip_count=$((skip_count + 1))
+      continue
+    fi
 
     store_message_insert "${conv_id}" "${role}" "${content}" "${seq}" >/dev/null
     seq=$((seq + 1))
   done < <(jq -c '.mapping | to_entries[] | .value | select(.message != null)' "${file_path}" 2>/dev/null)
 
+  if [[ ${error_count} -gt 0 || ${skip_count} -gt 0 ]]; then
+    echo "WARNING: imported ${seq} messages, ${error_count} parse error(s), ${skip_count} skipped (empty role/content)" >&2
+  fi
   echo "${conv_id}"
 }
 
