@@ -62,13 +62,13 @@ validator_run_python() {
 
   # pytest
   if command -v pytest &>/dev/null; then
-    if (cd "${repo_root}" && pytest --tb=short -q 2>&1); then
+    if (cd "${repo_root}" && pytest --tb=short -q >/dev/null 2>&1); then
       results+=('{"name":"pytest","status":"PASS"}')
     else
       results+=('{"name":"pytest","status":"FAIL_TEST"}')
     fi
   elif [[ -f "${repo_root}/pyproject.toml" ]] && grep -q "pytest" "${repo_root}/pyproject.toml" 2>/dev/null; then
-    if (cd "${repo_root}" && python -m pytest --tb=short -q 2>&1); then
+    if (cd "${repo_root}" && python -m pytest --tb=short -q >/dev/null 2>&1); then
       results+=('{"name":"pytest","status":"PASS"}')
     else
       results+=('{"name":"pytest","status":"FAIL_TEST"}')
@@ -77,7 +77,7 @@ validator_run_python() {
 
   # ruff
   if command -v ruff &>/dev/null; then
-    if (cd "${repo_root}" && ruff check . 2>&1); then
+    if (cd "${repo_root}" && ruff check . >/dev/null 2>&1); then
       results+=('{"name":"ruff","status":"PASS"}')
     else
       results+=('{"name":"ruff","status":"FAIL_LINT"}')
@@ -86,7 +86,7 @@ validator_run_python() {
 
   # mypy
   if command -v mypy &>/dev/null; then
-    if (cd "${repo_root}" && mypy . 2>&1); then
+    if (cd "${repo_root}" && mypy . >/dev/null 2>&1); then
       results+=('{"name":"mypy","status":"PASS"}')
     else
       results+=('{"name":"mypy","status":"FAIL_TYPECHECK"}')
@@ -101,7 +101,7 @@ validator_run_python() {
   # Makefile / justfile
   if [[ -f "${repo_root}/Makefile" ]]; then
     if grep -q "^test:" "${repo_root}/Makefile" 2>/dev/null; then
-      if (cd "${repo_root}" && make test 2>&1); then
+      if (cd "${repo_root}" && make test >/dev/null 2>&1); then
         results+=('{"name":"make_test","status":"PASS"}')
       else
         results+=('{"name":"make_test","status":"FAIL_TEST"}')
@@ -110,7 +110,7 @@ validator_run_python() {
   fi
   if [[ -f "${repo_root}/justfile" ]] && command -v just &>/dev/null; then
     if just --list 2>/dev/null | grep -q "test"; then
-      if (cd "${repo_root}" && just test 2>&1); then
+      if (cd "${repo_root}" && just test >/dev/null 2>&1); then
         results+=('{"name":"just_test","status":"PASS"}')
       else
         results+=('{"name":"just_test","status":"FAIL_TEST"}')
@@ -134,9 +134,9 @@ validator_run_js() {
     pm="yarn"
   fi
 
-  # Run tests
+  # Run tests (suppress stdout/stderr to prevent JSON corruption)
   if [[ -f "${repo_root}/package.json" ]] && grep -q '"test"' "${repo_root}/package.json" 2>/dev/null; then
-    if (cd "${repo_root}" && ${pm} test 2>&1); then
+    if (cd "${repo_root}" && ${pm} test >/dev/null 2>&1); then
       results+=('{"name":"'${pm}'_test","status":"PASS"}')
     else
       results+=('{"name":"'${pm}'_test","status":"FAIL_TEST"}')
@@ -147,7 +147,7 @@ validator_run_js() {
   if command -v eslint &>/dev/null || [[ -f "${repo_root}/node_modules/.bin/eslint" ]]; then
     local eslint_cmd="eslint"
     [[ -f "${repo_root}/node_modules/.bin/eslint" ]] && eslint_cmd="${repo_root}/node_modules/.bin/eslint"
-    if (cd "${repo_root}" && ${eslint_cmd} . 2>&1); then
+    if (cd "${repo_root}" && ${eslint_cmd} . >/dev/null 2>&1); then
       results+=('{"name":"eslint","status":"PASS"}')
     else
       results+=('{"name":"eslint","status":"FAIL_LINT"}')
@@ -159,7 +159,7 @@ validator_run_js() {
     local tsc_cmd="tsc"
     [[ -f "${repo_root}/node_modules/.bin/tsc" ]] && tsc_cmd="${repo_root}/node_modules/.bin/tsc"
     if command -v "${tsc_cmd}" &>/dev/null || [[ -f "${tsc_cmd}" ]]; then
-      if (cd "${repo_root}" && ${tsc_cmd} --noEmit 2>&1); then
+      if (cd "${repo_root}" && ${tsc_cmd} --noEmit >/dev/null 2>&1); then
         results+=('{"name":"tsc","status":"PASS"}')
       else
         results+=('{"name":"tsc","status":"FAIL_TYPECHECK"}')
@@ -182,7 +182,7 @@ validator_run_shell() {
     done < <(find "${repo_root}" -maxdepth 3 -name "*.sh" -type f 2>/dev/null | head -50)
 
     if [[ ${#shell_files[@]} -gt 0 ]]; then
-      if shellcheck "${shell_files[@]}" 2>&1; then
+      if shellcheck "${shell_files[@]}" >/dev/null 2>&1; then
         results+=('{"name":"shellcheck","status":"PASS"}')
       else
         results+=('{"name":"shellcheck","status":"FAIL_LINT"}')
@@ -203,7 +203,7 @@ validator_run_docker() {
   # Dockerfile lint
   if [[ -f "${repo_root}/Dockerfile" ]]; then
     if command -v hadolint &>/dev/null; then
-      if hadolint "${repo_root}/Dockerfile" 2>&1; then
+      if hadolint "${repo_root}/Dockerfile" >/dev/null 2>&1; then
         results+=('{"name":"hadolint","status":"PASS"}')
       else
         results+=('{"name":"hadolint","status":"FAIL_LINT"}')
@@ -221,13 +221,13 @@ validator_run_docker() {
 
   if [[ -n "${compose_file}" ]]; then
     if command -v docker-compose &>/dev/null; then
-      if (cd "${repo_root}" && docker-compose config --quiet 2>&1); then
+      if (cd "${repo_root}" && docker-compose config --quiet >/dev/null 2>&1); then
         results+=('{"name":"docker_compose_config","status":"PASS"}')
       else
         results+=('{"name":"docker_compose_config","status":"FAIL_VALIDATE"}')
       fi
     elif command -v docker &>/dev/null; then
-      if (cd "${repo_root}" && docker compose config --quiet 2>&1); then
+      if (cd "${repo_root}" && docker compose config --quiet >/dev/null 2>&1); then
         results+=('{"name":"docker_compose_config","status":"PASS"}')
       else
         results+=('{"name":"docker_compose_config","status":"FAIL_VALIDATE"}')
@@ -243,7 +243,7 @@ validator_run_docker() {
     done < <(find "${repo_root}" -maxdepth 3 \( -name "*.yml" -o -name "*.yaml" \) -type f 2>/dev/null | head -20)
 
     if [[ ${#yaml_files[@]} -gt 0 ]]; then
-      if yamllint "${yaml_files[@]}" 2>&1; then
+      if yamllint "${yaml_files[@]}" >/dev/null 2>&1; then
         results+=('{"name":"yamllint","status":"PASS"}')
       else
         results+=('{"name":"yamllint","status":"FAIL_LINT"}')
@@ -261,7 +261,7 @@ validator_run_sql() {
 
   # Alembic migrations
   if [[ -d "${repo_root}/alembic" ]] && command -v alembic &>/dev/null; then
-    if (cd "${repo_root}" && alembic check 2>&1); then
+    if (cd "${repo_root}" && alembic check >/dev/null 2>&1); then
       results+=('{"name":"alembic_check","status":"PASS"}')
     else
       results+=('{"name":"alembic_check","status":"FAIL_VALIDATE"}')
@@ -270,7 +270,7 @@ validator_run_sql() {
 
   # Django migrations
   if [[ -f "${repo_root}/manage.py" ]]; then
-    if (cd "${repo_root}" && python manage.py migrate --check 2>&1); then
+    if (cd "${repo_root}" && python manage.py migrate --check >/dev/null 2>&1); then
       results+=('{"name":"django_migrate_check","status":"PASS"}')
     else
       results+=('{"name":"django_migrate_check","status":"FAIL_VALIDATE"}')
@@ -285,7 +285,7 @@ validator_run_sql() {
 
   if [[ ${#sql_files[@]} -gt 0 ]]; then
     if command -v sqlfluff &>/dev/null; then
-      if sqlfluff lint "${sql_files[@]}" 2>&1; then
+      if sqlfluff lint "${sql_files[@]}" >/dev/null 2>&1; then
         results+=('{"name":"sqlfluff","status":"PASS"}')
       else
         results+=('{"name":"sqlfluff","status":"FAIL_LINT"}')
@@ -311,7 +311,7 @@ validator_run_docs() {
     done < <(find "${repo_root}" -maxdepth 3 -name "*.md" -type f 2>/dev/null | head -20)
 
     if [[ ${#md_files[@]} -gt 0 ]]; then
-      if markdownlint "${md_files[@]}" 2>&1; then
+      if markdownlint "${md_files[@]}" >/dev/null 2>&1; then
         results+=('{"name":"markdownlint","status":"PASS"}')
       else
         results+=('{"name":"markdownlint","status":"FAIL_LINT"}')
