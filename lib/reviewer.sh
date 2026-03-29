@@ -482,9 +482,13 @@ REVIEW_SYS
 
         local api_call_success="false"
 
-        # 统一使用 api_call_auto（优先级：claude CLI > OpenAI > Anthropic）
-        # Reviewer 偏好 codex 角色，api_call_auto 会先尝试 claude CLI
-        raw_review_output=$(api_call_auto "codex" "${review_system_prompt}" "${prompt}" 4096 2>/dev/null) && api_call_success="true"
+        # Read reviewer engine from config (engines.reviewer, default: codex)
+        # This ensures the reviewer is a DIFFERENT model from the executor (engines.primary)
+        local reviewer_engine="codex"
+        if [[ -n "${BASHCLAW_CONFIG:-}" && -f "${BASHCLAW_CONFIG}" ]] && command -v jq &>/dev/null; then
+          reviewer_engine="$(jq -r '.engines.reviewer // "codex"' "${BASHCLAW_CONFIG}" 2>/dev/null)"
+        fi
+        raw_review_output=$(api_call_auto "${reviewer_engine}" "${review_system_prompt}" "${prompt}" 4096 2>/dev/null) && api_call_success="true"
 
         if [[ "${api_call_success}" != "true" ]]; then
             echo "REVIEW_ERROR: API 调用失败，降级检查 mock 输出" >&2

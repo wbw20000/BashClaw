@@ -15,7 +15,10 @@ EXECUTOR_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "${EXECUTOR_SCRIPT_DIR}/api_client.sh" ]] && source "${EXECUTOR_SCRIPT_DIR}/api_client.sh"
 
 # Determine which engine to use for execution (Section 8.2, 8.3)
-# Priority: BASHCLAW_ENGINE_OVERRIDE > tier-based selection > config default
+# Priority: BASHCLAW_ENGINE_OVERRIDE > config engines.primary
+# The executor ALWAYS uses engines.primary (default: opus4.6).
+# The reviewer uses engines.reviewer (default: codex).
+# This ensures dual-model cross-validation: different models execute vs review.
 executor_select_engine() {
   local tier="${1:-1}"
   local task_complexity="${2:-low}"
@@ -26,25 +29,17 @@ executor_select_engine() {
     return 0
   fi
 
-  # Engine selection heuristic (Section 8.3)
-  # Complex analysis / deep dependencies → Opus
-  # Quick implementation / test generation / patch → Codex
-  case "${task_complexity}" in
-    high|complex)
-      echo "opus4.6"
-      ;;
-    low|simple|patch)
-      echo "codex"
-      ;;
-    *)
-      # Default based on tier
-      if [[ "${tier}" -ge 3 ]]; then
-        echo "opus4.6"
-      else
-        echo "codex"
-      fi
-      ;;
-  esac
+  # Read from config: executor always uses engines.primary
+  local config_engine=""
+  if [[ -n "${BASHCLAW_CONFIG:-}" && -f "${BASHCLAW_CONFIG}" ]] && command -v jq &>/dev/null; then
+    config_engine="$(jq -r '.engines.primary // ""' "${BASHCLAW_CONFIG}" 2>/dev/null)"
+  fi
+
+  if [[ -n "${config_engine}" ]]; then
+    echo "${config_engine}"
+  else
+    echo "opus4.6"
+  fi
 }
 
 # Build executor context from knowledge gate output and task metadata
