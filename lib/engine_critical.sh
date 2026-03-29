@@ -212,19 +212,55 @@ engine_critical_run() {
   issue_trace_record_evidence_resolution "${task_id}" "${resolution_summary}"
   echo "[CRITICAL] ${resolution_summary}"
 
-  # ── Step 7: Human Escalation（Tier 3 必须经过人工） ──────────────
+  # ── Step 6.5: Consensus Loop（证据裁决不可行时） ──────────────────
+  # 对 UNVERIFIABLE issues 让 Claude 和 Codex 多轮讨论，尝试达成共识
+  local consensus_result="null"
+  if [[ ${unverifiable} -gt 0 ]]; then
+    echo "[CRITICAL] Step 6.5: 共识循环 (${unverifiable} UNVERIFIABLE issues)..."
+    if [[ -f "${BASHCLAW_ROOT}/lib/consensus_loop.sh" ]]; then
+      source "${BASHCLAW_ROOT}/lib/consensus_loop.sh" 2>/dev/null || true
+    fi
+    if type consensus_run &>/dev/null; then
+      local consensus_code=0
+      consensus_result=$(consensus_run "${resolution_result}" "${original_requirement}" 2>/dev/null) || consensus_code=$?
+      echo "${consensus_result}" > "${work_dir}/consensus_results.json" 2>/dev/null || true
+
+      if [[ $consensus_code -eq 0 ]]; then
+        echo "[CRITICAL] 共识循环: 全部达成共识"
+        # 更新 unverifiable 计数 — 共识达成的不再需要人工
+        unverifiable=0
+      else
+        local still_divergent
+        still_divergent=$(echo "$consensus_result" | jq -r '.still_divergent // 0' 2>/dev/null)
+        unverifiable=${still_divergent}
+        echo "[CRITICAL] 共识循环: ${still_divergent} issue(s) 仍有分歧"
+      fi
+    fi
+  fi
+
+  # ── Step 7: Human Escalation（仅在共识循环也无法解决时） ──────────
   echo "[CRITICAL] Step 7/8: Human Escalation..."
 
-  # 检查是否需要升级（Tier 3 默认需要人工）
+  # 检查是否需要升级
+  # Tier 3 默认需要人工，但如果所有问题都通过证据裁决 + 共识循环解决了，可以跳过
   local needs_escalation=true
-  local trigger_reasons="Tier 3 Critical 流程默认需要人工裁决"
+  local trigger_reasons=""
 
-  # 额外检查：是否有 UNVERIFIABLE 或 REQUIREMENT_CONFLICT
+  if [[ ${confirmed} -gt 0 || ${unverifiable} -gt 0 || ${req_conflict} -gt 0 ]]; then
+    trigger_reasons="CONFIRMED=${confirmed} UNVERIFIABLE=${unverifiable} REQUIREMENT_CONFLICT=${req_conflict}"
+  else
+    # 所有 issues 都被 REFUTED 或通过共识解决
+    needs_escalation=false
+    echo "[CRITICAL] 所有问题已通过证据裁决或共识循环解决，跳过人工升级"
+  fi
+
+  # 额外检查
   if [[ -f "${work_dir}/resolution_results.json" ]]; then
     local extra_reasons
     extra_reasons=$(escalation_should_trigger "${work_dir}/resolution_results.json" 2>/dev/null || true)
     if [[ -n "${extra_reasons}" ]]; then
       trigger_reasons="${trigger_reasons}\n${extra_reasons}"
+      needs_escalation=true
     fi
   fi
 

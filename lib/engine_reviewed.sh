@@ -38,6 +38,8 @@ source "${SCRIPT_DIR}/skip_review.sh"
 source "${SCRIPT_DIR}/evidence_resolution.sh"
 # shellcheck source=lib/targeted_validation.sh
 source "${SCRIPT_DIR}/targeted_validation.sh"
+# shellcheck source=lib/consensus_loop.sh
+[[ -f "${SCRIPT_DIR}/consensus_loop.sh" ]] && source "${SCRIPT_DIR}/consensus_loop.sh"
 
 # =============================================================================
 # Lightweight audit helper — wraps dev-1's audit_log_write for event logging.
@@ -410,7 +412,32 @@ run_tier2_reviewed() {
     needs_fix=$(echo "$resolution_result" | jq -r '.action_plan.needs_executor_fix // false' 2>/dev/null) || needs_fix="false"
 
     # =========================================================================
-    # Step 8: Human Escalation（如需要）
+    # Step 7.5: Consensus Loop — 共识循环（证据裁决不可行时）
+    # 让 Executor (Claude) 和 Reviewer (Codex) 多轮讨论 UNVERIFIABLE issues，
+    # 直到双方达成共识。只有共识循环也无法解决的分歧才升级到人工。
+    # =========================================================================
+    local consensus_result="null"
+    if [[ "$needs_human" == "true" ]] && type consensus_run &>/dev/null; then
+        echo "=== Step 7.5: Consensus Loop ===" >&2
+        local consensus_code=0
+        consensus_result=$(consensus_run "$resolution_result" "$user_request" 2>/dev/null) || consensus_code=$?
+
+        if [[ $consensus_code -eq 0 ]]; then
+            # 全部达成共识，不再需要人工升级
+            echo ">>> Consensus reached — skipping human escalation <<<" >&2
+            needs_human="false"
+            _tier2_log "CONSENSUS_REACHED" ""
+        else
+            # 仍有分歧，继续人工升级
+            local still_divergent
+            still_divergent=$(echo "$consensus_result" | jq -r '.still_divergent // 0' 2>/dev/null)
+            echo ">>> Consensus loop: ${still_divergent} issue(s) still divergent — escalating to human <<<" >&2
+            _tier2_log "CONSENSUS_PARTIAL" ""
+        fi
+    fi
+
+    # =========================================================================
+    # Step 8: Human Escalation（仅在共识循环也无法解决时）
     # =========================================================================
     local escalation_result="null"
     if [[ "$needs_human" == "true" ]]; then
@@ -476,6 +503,7 @@ run_tier2_reviewed() {
         --argjson skip "$skip_result" \
         --argjson review "$review_result" \
         --argjson resolution "$resolution_result" \
+        --argjson consensus "${consensus_result:-null}" \
         --argjson escalation "${escalation_result:-null}" \
         '{
             "status": $status,
@@ -489,6 +517,7 @@ run_tier2_reviewed() {
             "skip_review": $skip,
             "review_result": $review,
             "evidence_resolution": $resolution,
+            "consensus_loop": $consensus,
             "human_escalation": $escalation,
             "review_skipped": false
         }')
