@@ -242,7 +242,7 @@ api_call_anthropic() {
 #   0 成功, 1 失败
 # -----------------------------------------------------------------------------
 api_call_openai() {
-  local model="${1:-gpt-4}"
+  local model="${1:-o3-mini}"
   local system_prompt="${2:-}"
   local user_message="${3:-}"
   local max_tokens="${4:-4096}"
@@ -367,15 +367,16 @@ api_call_auto() {
   local max_tokens="${4:-4096}"
 
   # 确定首选和备选 provider
+  # OpenAI 使用最新模型；Anthropic 使用 Claude Opus 4.6
   local primary_provider="anthropic"
   local primary_model="claude-opus-4-6-20250219"
   local fallback_provider="openai"
-  local fallback_model="gpt-4"
+  local fallback_model="o3-mini"
 
   case "${preferred}" in
     codex|openai)
       primary_provider="openai"
-      primary_model="gpt-4"
+      primary_model="o3-mini"
       fallback_provider="anthropic"
       fallback_model="claude-opus-4-6-20250219"
       ;;
@@ -383,7 +384,7 @@ api_call_auto() {
       primary_provider="anthropic"
       primary_model="claude-opus-4-6-20250219"
       fallback_provider="openai"
-      fallback_model="gpt-4"
+      fallback_model="o3-mini"
       ;;
   esac
 
