@@ -368,11 +368,8 @@ api_call_auto() {
 
   # Executor 用 claude CLI，Reviewer 用 codex CLI
   # 两个 CLI 订阅模式自动使用最新模型，无需指定版本
+  # 当前不使用 REST API 回退，如需启用见下方注释块
 
-  # 直接调用对应的 CLI：
-  #   - codex/openai → codex CLI（Reviewer 角色）
-  #   - opus/anthropic → claude CLI（Executor 角色）
-  # 无回退链。CLI 不可用直接报错。
   case "${preferred}" in
     codex|openai)
       if api_has_codex_cli; then
@@ -397,6 +394,48 @@ api_call_auto() {
       return 1
       ;;
   esac
+
+  # =========================================================================
+  # REST API 回退（当前禁用，保留供未来启用）
+  # 如需启用：取消下方注释，并在 .env 中设置 ANTHROPIC_API_KEY / OPENAI_API_KEY
+  # =========================================================================
+  # local primary_provider="anthropic"
+  # local primary_model="claude-opus-4-6-20250219"
+  # local fallback_provider="openai"
+  # local fallback_model="o3-mini"
+  #
+  # case "${preferred}" in
+  #   codex|openai)
+  #     primary_provider="openai"
+  #     primary_model="o3-mini"
+  #     fallback_provider="anthropic"
+  #     fallback_model="claude-opus-4-6-20250219"
+  #     ;;
+  # esac
+  #
+  # local has_primary_key="false"
+  # local has_fallback_key="false"
+  # [[ "${primary_provider}" == "anthropic" && -n "${ANTHROPIC_API_KEY:-}" ]] && has_primary_key="true"
+  # [[ "${primary_provider}" == "openai" && -n "${OPENAI_API_KEY:-}" ]] && has_primary_key="true"
+  # [[ "${fallback_provider}" == "anthropic" && -n "${ANTHROPIC_API_KEY:-}" ]] && has_fallback_key="true"
+  # [[ "${fallback_provider}" == "openai" && -n "${OPENAI_API_KEY:-}" ]] && has_fallback_key="true"
+  #
+  # if [[ "${has_primary_key}" == "true" ]]; then
+  #   local result
+  #   if [[ "${primary_provider}" == "anthropic" ]]; then
+  #     result=$(api_call_anthropic "${primary_model}" "${system_prompt}" "${user_message}" "${max_tokens}" 2>/dev/null) && { echo "${result}"; return 0; }
+  #   else
+  #     result=$(api_call_openai "${primary_model}" "${system_prompt}" "${user_message}" "${max_tokens}" 2>/dev/null) && { echo "${result}"; return 0; }
+  #   fi
+  # fi
+  # if [[ "${has_fallback_key}" == "true" ]]; then
+  #   local result
+  #   if [[ "${fallback_provider}" == "anthropic" ]]; then
+  #     result=$(api_call_anthropic "${fallback_model}" "${system_prompt}" "${user_message}" "${max_tokens}") && { echo "${result}"; return 0; }
+  #   else
+  #     result=$(api_call_openai "${fallback_model}" "${system_prompt}" "${user_message}" "${max_tokens}") && { echo "${result}"; return 0; }
+  #   fi
+  # fi
 
   echo "API_ERROR: 所有 API 调用均失败" >&2
   return 1
