@@ -366,125 +366,37 @@ api_call_auto() {
   local user_message="${3:-}"
   local max_tokens="${4:-4096}"
 
-  # 确定首选和备选 provider
-  # OpenAI 使用最新模型；Anthropic 使用 Claude Opus 4.6
-  local primary_provider="anthropic"
-  local primary_model="claude-opus-4-6-20250219"
-  local fallback_provider="openai"
-  local fallback_model="o3-mini"
+  # Executor 用 claude CLI，Reviewer 用 codex CLI
+  # 两个 CLI 订阅模式自动使用最新模型，无需指定版本
 
+  # 直接调用对应的 CLI：
+  #   - codex/openai → codex CLI（Reviewer 角色）
+  #   - opus/anthropic → claude CLI（Executor 角色）
+  # 无回退链。CLI 不可用直接报错。
   case "${preferred}" in
     codex|openai)
-      primary_provider="openai"
-      primary_model="o3-mini"
-      fallback_provider="anthropic"
-      fallback_model="claude-opus-4-6-20250219"
-      ;;
-    opus4.6|opus|anthropic|*)
-      primary_provider="anthropic"
-      primary_model="claude-opus-4-6-20250219"
-      fallback_provider="openai"
-      fallback_model="o3-mini"
-      ;;
-  esac
-
-  # 最高优先级：CLI 订阅模式（无需 API key）
-  # 根据 preferred engine 选择对应的 CLI：
-  #   - codex/openai → 优先用 codex CLI
-  #   - opus/anthropic → 优先用 claude CLI
-  case "${preferred}" in
-    codex|openai)
-      # Reviewer 角色：优先 Codex CLI，回退到 Claude CLI
       if api_has_codex_cli; then
         local codex_result
         codex_result=$(api_call_codex_review "${user_message}" 2>/dev/null) && {
           echo "${codex_result}"
           return 0
         }
-        echo "API_WARN: codex review 调用失败，尝试 claude -p 回退" >&2
       fi
-      if api_has_claude_cli; then
-        local cli_result
-        cli_result=$(api_call_claude_cli "${system_prompt}" "${user_message}" "${max_tokens}") && {
-          echo "${cli_result}"
-          return 0
-        }
-      fi
+      echo "API_ERROR: codex CLI 不可用。请安装: npm install -g @openai/codex" >&2
+      return 1
       ;;
     *)
-      # Executor 角色：优先 Claude CLI，回退到 Codex CLI
       if api_has_claude_cli; then
         local cli_result
         cli_result=$(api_call_claude_cli "${system_prompt}" "${user_message}" "${max_tokens}") && {
           echo "${cli_result}"
           return 0
         }
-        echo "API_WARN: claude -p 调用失败，尝试 codex exec 回退" >&2
       fi
-      if api_has_codex_cli; then
-        local codex_result
-        codex_result=$(api_call_codex_exec "${user_message}" 2>/dev/null) && {
-          echo "${codex_result}"
-          return 0
-        }
-      fi
+      echo "API_ERROR: claude CLI 不可用。请安装: npm install -g @anthropic-ai/claude-code" >&2
+      return 1
       ;;
   esac
-
-  # 尝试首选 REST API provider
-  local has_primary_key="false"
-  local has_fallback_key="false"
-
-  if [[ "${primary_provider}" == "anthropic" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
-    has_primary_key="true"
-  elif [[ "${primary_provider}" == "openai" && -n "${OPENAI_API_KEY:-}" ]]; then
-    has_primary_key="true"
-  fi
-
-  if [[ "${fallback_provider}" == "anthropic" && -n "${ANTHROPIC_API_KEY:-}" ]]; then
-    has_fallback_key="true"
-  elif [[ "${fallback_provider}" == "openai" && -n "${OPENAI_API_KEY:-}" ]]; then
-    has_fallback_key="true"
-  fi
-
-  # 无任何可用 key 且 claude CLI 也不可用
-  if [[ "${has_primary_key}" == "false" && "${has_fallback_key}" == "false" ]]; then
-    echo "API_ERROR: 无可用的调用方式（claude CLI 不可用，ANTHROPIC_API_KEY 和 OPENAI_API_KEY 均未设置）" >&2
-    return 1
-  fi
-
-  # 尝试首选
-  if [[ "${has_primary_key}" == "true" ]]; then
-    local result
-    if [[ "${primary_provider}" == "anthropic" ]]; then
-      result=$(api_call_anthropic "${primary_model}" "${system_prompt}" "${user_message}" "${max_tokens}" 2>/dev/null) && {
-        echo "${result}"
-        return 0
-      }
-    else
-      result=$(api_call_openai "${primary_model}" "${system_prompt}" "${user_message}" "${max_tokens}" 2>/dev/null) && {
-        echo "${result}"
-        return 0
-      }
-    fi
-    echo "[API_AUTO] 首选 ${primary_provider} 调用失败，尝试回退到 ${fallback_provider}" >&2
-  fi
-
-  # 尝试备选
-  if [[ "${has_fallback_key}" == "true" ]]; then
-    local result
-    if [[ "${fallback_provider}" == "anthropic" ]]; then
-      result=$(api_call_anthropic "${fallback_model}" "${system_prompt}" "${user_message}" "${max_tokens}") && {
-        echo "${result}"
-        return 0
-      }
-    else
-      result=$(api_call_openai "${fallback_model}" "${system_prompt}" "${user_message}" "${max_tokens}") && {
-        echo "${result}"
-        return 0
-      }
-    fi
-  fi
 
   echo "API_ERROR: 所有 API 调用均失败" >&2
   return 1
