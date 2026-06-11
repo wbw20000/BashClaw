@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-022",
+  "decision_title": "__init__.py 中禁止包含有副作用的 import",
+  "task_summary": "重构 package 的 __init__.py，移除数据库连接、HTTP 客户端初始化等有副作用的 import",
+  "applicable_scope": "Python package __init__.py files, module initialization, package public API exports",
+  "non_applicable_scope": "纯类型和常量的 re-export, 轻量级的 __all__ 定义",
+  "final_decision": "__init__.py 仅允许 re-export 纯类/函数/常量定义。任何涉及 I/O、网络连接、全局状态修改的初始化代码必须用显式的 init() 或 setup() 函数包裹，由调用方主动触发",
+  "why": "utils/__init__.py 中 from .db import get_engine 触发了 SQLAlchemy engine 创建（建立数据库连接）。任何模块 import utils 或 from utils import format_date（一个纯函数）都会触发数据库连接。导致：1) 单元测试因没有数据库而失败 2) CLI 工具启动变慢 3) 无法在没有数据库的环境中使用 utils 包的任何功能",
+  "known_pitfalls": [
+    "from package import * 会执行 __init__.py 中所有的 import——即使 __all__ 限制了导出列表，所有 import 语句仍然会执行",
+    "logging.getLogger() 在 __init__.py 中看似无副作用，但如果配置了 handler（如写文件），模块 import 时就会创建文件句柄",
+    "Django 的 AppConfig.ready() 是处理 app 启动副作用的正确位置，不要在 models/__init__.py 中做 signal 注册"
+  ],
+  "validation_evidence": "重构后 import utils 不再触发数据库连接。单元测试运行时间从 12 秒降至 3 秒（省去了不必要的数据库连接建立和超时）",
+  "issue_type": "design_concern",
+  "review_or_human_required": false,
+  "risk_tags": ["python", "import", "side-effects", "package-design"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

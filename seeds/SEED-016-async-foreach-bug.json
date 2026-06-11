@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-016",
+  "decision_title": "禁止在 Array.forEach 中使用 async/await",
+  "task_summary": "将所有 forEach + async 回调的用法替换为 for...of 或 Promise.all + map",
+  "applicable_scope": "JavaScript/TypeScript async iteration, array processing with async operations",
+  "non_applicable_scope": "同步的 forEach 回调, 不需要等待结果的 fire-and-forget 场景",
+  "final_decision": "需要顺序执行的异步操作使用 for...of 循环。需要并行执行的使用 Promise.all(array.map(async item => ...))。在 ESLint 中启用 no-return-await 和自定义规则禁止 forEach + async 组合",
+  "why": "Array.forEach 不会 await 回调的返回值（它不关心回调是否返回 Promise）。写 items.forEach(async item => { await process(item) }) 看起来像是顺序处理，但实际上所有迭代同时启动且 forEach 立即返回。后续代码在所有异步操作完成前就开始执行，导致数据不完整或竞态条件",
+  "known_pitfalls": [
+    "for...of 是真正的顺序执行，但性能差——如果各迭代间无依赖关系，应该用 Promise.all 并行处理",
+    "Promise.all 在任一 Promise reject 时会立即 reject 并丢弃其余结果——如果需要收集所有结果（包括失败的），用 Promise.allSettled",
+    "Array.map 中的 async 函数返回 Promise 数组，必须用 await Promise.all() 等待，否则和 forEach 问题一样"
+  ],
+  "validation_evidence": "在代码库中搜索 forEach.*async 模式，发现 7 处使用。替换后修复了 2 个间歇性数据不完整 bug（批量发送通知和批量更新缓存）",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["javascript", "async", "array-methods", "concurrency"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

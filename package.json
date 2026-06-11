@@ -1,0 +1,18 @@
+{
+  "name": "bashclaw",
+  "version": "1.0.0",
+  "description": "Knowledge-first, evidence-driven coding workflow",
+  "bin": {
+    "bashclaw": "./bin/bashclaw.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "for f in tests/test_*.sh; do bash \"$f\"; done"
+  },
+  "keywords": ["code-review", "knowledge-base", "developer-tools"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}

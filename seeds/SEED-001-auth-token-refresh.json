@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-001",
+  "decision_title": "刷新 token 时必须校验租户边界",
+  "task_summary": "auth/session.py 刷新逻辑修改，确保 refresh token 流程中同时校验 tenant_id 与 user_id",
+  "applicable_scope": "auth token refresh, session management, multi-tenant authentication",
+  "non_applicable_scope": "纯前端 token 展示逻辑, 单租户系统的 token 刷新",
+  "final_decision": "不允许仅按 user_id 查询 refresh token，必须同时校验 tenant_id。刷新时需验证 token 对应的 tenant_id 与请求上下文中的 tenant_id 一致",
+  "why": "存在跨租户污染风险。攻击者可以用合法的 refresh token 在另一个租户上下文中请求刷新，获取到不属于自己租户的 access token，从而访问其他租户数据。之前仅用 user_id 做查询，没有 tenant_id 约束",
+  "known_pitfalls": [
+    "只覆盖 happy path 测试会漏掉非法 token 场景，必须编写跨租户刷新的负面测试用例",
+    "token 过期校验和租户校验是两个独立检查，不能合并为一个条件——过期应返回 401，租户不匹配应返回 403",
+    "数据库查询索引需要包含 tenant_id，否则全表扫描会导致性能退化"
+  ],
+  "validation_evidence": "cross-tenant access test FAILED as expected — 使用租户 A 的 refresh token 在租户 B 上下文中刷新，返回 403 Forbidden",
+  "issue_type": "security_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["auth", "token", "multi-tenant", "cross-tenant"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

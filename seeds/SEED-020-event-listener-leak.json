@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-020",
+  "decision_title": "事件监听器必须在组件卸载或作用域结束时移除",
+  "task_summary": "修复 React 组件和 Node.js 服务中事件监听器未清理导致的内存泄漏",
+  "applicable_scope": "DOM event listeners, EventEmitter listeners, WebSocket handlers, React useEffect cleanup, pub/sub subscriptions",
+  "non_applicable_scope": "应用级别的全局监听器（如 uncaughtException handler）, 生命周期与应用一致的监听器",
+  "final_decision": "所有 addEventListener/on/subscribe 调用必须有对应的 removeEventListener/off/unsubscribe。React 中在 useEffect 的 cleanup 函数中移除。Node.js 中使用 AbortController.signal 或在 destroy/close 事件中清理",
+  "why": "React SPA 中一个图表组件在 useEffect 中注册了 window resize 监听器但没有 cleanup。每次路由切换组件重新挂载都会多注册一个监听器。运行 30 分钟后积累了上百个重复监听器，页面 resize 时每个都触发 re-render，导致页面卡顿。Node.js 端 EventEmitter 积累了大量监听器触发 MaxListenersExceeded 警告",
+  "known_pitfalls": [
+    "removeEventListener 需要传入与 addEventListener 完全相同的函数引用——如果用了箭头函数或 .bind()，每次创建的是新函数引用，无法正确移除",
+    "React StrictMode 在开发环境会双重执行 useEffect，如果 cleanup 不正确会导致监听器注册两次但只移除一次",
+    "第三方库的 subscribe 方法返回的 unsubscribe 函数容易被忽略——如 Redux store.subscribe()、RxJS observable.subscribe()"
+  ],
+  "validation_evidence": "Chrome DevTools Memory 分析：修复前 30 分钟内存从 50MB 增长到 180MB（监听器积累），修复后稳定在 55MB 左右",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["javascript", "memory-leak", "event-listener", "react"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

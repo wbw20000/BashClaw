@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-014",
+  "decision_title": "Dockerfile 中依赖安装层必须在源码 COPY 之前",
+  "task_summary": "重构 Dockerfile 层顺序，确保依赖声明文件变更时才重建依赖层，源码变更不触发依赖重装",
+  "applicable_scope": "Dockerfile optimization, CI/CD build pipeline, Docker layer caching",
+  "non_applicable_scope": "不使用 Docker 的部署方式, 单次构建的一次性脚本",
+  "final_decision": "Dockerfile 严格遵循层缓存友好的顺序：1) 基础镜像 2) 系统依赖 3) COPY 依赖声明文件（package.json/requirements.txt/go.mod） 4) RUN 安装依赖 5) COPY 源码 6) BUILD。同时 .dockerignore 排除 node_modules、.git、__pycache__ 等",
+  "why": "原 Dockerfile 先 COPY . . 再 RUN pip install，导致任何源码文件变更都会使 pip install 缓存失效，每次 CI 构建都重新下载安装所有依赖（约 3 分钟）。调整层顺序后，仅依赖文件变更才触发重装，普通代码变更构建时间从 4 分钟降到 45 秒",
+  "known_pitfalls": [
+    "pip install 默认不生成确定性的安装顺序，需要用 --no-cache-dir 配合 lock 文件确保一致性",
+    "多阶段构建（multi-stage build）中，前一阶段的缓存失效不会自动传递到后一阶段——但如果 COPY --from 引用的产物变了，后续层还是会失效",
+    "Docker BuildKit 的缓存挂载（--mount=type=cache）可以跨构建保留 pip/npm cache，但 CI 环境中需要确保缓存卷被持久化"
+  ],
+  "validation_evidence": "优化后 CI 构建时间对比：仅代码变更时从 4 min 降至 45 sec；依赖变更时从 4 min 降至 3.5 min（因为基础层仍有缓存）",
+  "issue_type": "design_concern",
+  "review_or_human_required": false,
+  "risk_tags": ["docker", "ci-cd", "build-performance", "caching"],
+  "changeType": "config_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

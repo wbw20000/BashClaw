@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+###############################################################################
+# BashClaw pre-push hook — Tier 2 review gate
+# Checks for unreviewed high-risk commits before push.
+# Blocks push if unresolved high-risk commits exist.
+###############################################################################
+
+BASHCLAW_ROOT="${BASHCLAW_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+export PATH="/c/sqlite:${PATH}"
+
+# Graceful exit if sqlite3 not available
+command -v sqlite3 &>/dev/null || exit 0
+
+# Only run if BashClaw is initialized
+[[ -f "${BASHCLAW_ROOT}/.bashclaw/bashclaw.db" ]] || exit 0
+
+export BASHCLAW_DB="${BASHCLAW_ROOT}/.bashclaw/bashclaw.db"
+
+if [[ -f "${BASHCLAW_ROOT}/lib/hook_helpers.sh" ]]; then
+  source "${BASHCLAW_ROOT}/lib/hook_helpers.sh"
+else
+  exit 0
+fi
+
+# Check for unreviewed high-risk commits
+HIGH_RISK=$(hook_get_high_risk_commits 2>/dev/null) || HIGH_RISK="[]"
+
+if [[ "${HIGH_RISK}" != "[]" && -n "${HIGH_RISK}" ]]; then
+  COUNT=$(echo "${HIGH_RISK}" | jq 'length' 2>/dev/null) || COUNT=0
+  if [[ "${COUNT}" -gt 0 ]]; then
+    echo "" >&2
+    echo "[BashClaw] WARNING: ${COUNT} unreviewed high-risk commit(s) detected:" >&2
+    echo "${HIGH_RISK}" | jq -r '.[] | "  \(.commit_hash[0:8]) risk=\(.risk_level) tags=\(.risk_tags)"' 2>/dev/null >&2
+    echo "" >&2
+    echo "Run 'bashclaw.sh run /review <task>' to review, or set BASHCLAW_SKIP_PUSH_GATE=1 to bypass." >&2
+    echo "" >&2
+
+    # Allow bypass via env var
+    if [[ "${BASHCLAW_SKIP_PUSH_GATE:-}" == "1" ]]; then
+      echo "[BashClaw] Push gate bypassed via BASHCLAW_SKIP_PUSH_GATE=1" >&2
+    else
+      exit 1
+    fi
+  fi
+fi
+
+# Mark commits as reviewed on successful push
+hook_clear_pushed_commits 2>/dev/null || true

@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-002",
+  "decision_title": "CORS 配置禁止使用通配符 *，必须显式白名单",
+  "task_summary": "修复 API 网关 CORS 配置，将 Access-Control-Allow-Origin 从 * 改为显式域名白名单",
+  "applicable_scope": "API CORS configuration, gateway settings, backend HTTP headers",
+  "non_applicable_scope": "公共只读 API（如 CDN 资源、开放数据接口）, 开发环境本地调试",
+  "final_decision": "生产环境 CORS 必须使用显式域名白名单，禁止 Access-Control-Allow-Origin: *。白名单从环境变量 ALLOWED_ORIGINS 读取，支持逗号分隔多个域名",
+  "why": "Allow-Origin: * 配合 credentials: true 时，浏览器会拒绝请求（安全策略）。但更危险的是开发者会因此去掉 credentials 要求或用代理绕过，导致真正的 CSRF 防护被削弱。此外通配符允许任意第三方网站发起跨域请求读取响应内容",
+  "known_pitfalls": [
+    "很多框架默认 CORS 配置为 *，升级框架版本后可能被重置——需在 CI 中加检查",
+    "Access-Control-Allow-Origin 不能返回多个值，必须根据请求的 Origin 头动态匹配白名单并返回对应单个值",
+    "预检请求 (OPTIONS) 也需要正确返回 CORS 头，否则复杂请求会被浏览器拦截"
+  ],
+  "validation_evidence": "curl 测试使用非白名单 Origin 请求，返回响应中不包含 Access-Control-Allow-Origin 头；白名单域名请求正常返回对应 Origin",
+  "issue_type": "security_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["cors", "http-security", "csrf"],
+  "changeType": "config_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

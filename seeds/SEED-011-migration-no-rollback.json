@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-011",
+  "decision_title": "每个 Migration 必须包含可执行的 rollback 方案",
+  "task_summary": "强制要求所有数据库 migration 提供 down/rollback 函数，并在 CI 中自动验证 up+down 的可逆性",
+  "applicable_scope": "database schema migrations, data migrations, Alembic/Knex/Django migration files",
+  "non_applicable_scope": "不可逆的数据清洗操作（需在 PR 中显式标注为 irreversible）",
+  "final_decision": "所有 migration 文件必须实现 down/rollback 方法。CI pipeline 中新增验证步骤：对每个新 migration 执行 up → down → up 循环，验证可逆性。不可逆 migration 必须在文件头部添加 # IRREVERSIBLE 标记并在 PR 描述中说明原因",
+  "why": "一次生产部署中 migration 执行了加列 + 数据回填 + 删旧列的操作。部署后发现新代码有 bug 需要回滚，但 migration 没有 down 方法。手动回滚需要 DBA 介入，服务降级了 4 小时",
+  "known_pitfalls": [
+    "删列操作的 rollback 只能重新创建列结构，无法恢复数据——需要在删列前备份数据或采用两阶段部署（先停止写入旧列，再删列）",
+    "Alembic 的 autogenerate 不会自动生成 downgrade 函数，很多开发者会留空或写 pass",
+    "索引创建在大表上可能耗时数分钟，rollback 时 DROP INDEX 很快，但重新 up 时又要等很久——需要用 CREATE INDEX CONCURRENTLY"
+  ],
+  "validation_evidence": "CI 验证上线后，第一周就拦截了 3 个缺少 rollback 的 migration PR，其中 1 个包含不可逆的列删除操作",
+  "issue_type": "regression_risk",
+  "review_or_human_required": true,
+  "risk_tags": ["migration", "database", "rollback", "deployment"],
+  "changeType": "process_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

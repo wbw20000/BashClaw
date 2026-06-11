@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-004",
+  "decision_title": "禁止字符串拼接构建 SQL 查询，必须使用参数化查询",
+  "task_summary": "重构 report 模块中的动态查询构建器，从 f-string 拼接改为参数化查询 + 安全的列名白名单",
+  "applicable_scope": "database query construction, dynamic filtering, sorting, search functionality",
+  "non_applicable_scope": "ORM 模型定义中的静态 SQL, 数据库 migration 脚本中的 DDL 语句",
+  "final_decision": "所有动态 SQL 必须使用参数化查询（%s 或 :param 占位符）。对于动态列名和表名（无法参数化的部分），必须使用白名单校验——将允许的列名/表名定义为常量集合，输入不在白名单中则拒绝",
+  "why": "report 模块允许用户选择排序字段和过滤条件，之前用 f\"ORDER BY {sort_field}\" 拼接。攻击者可以传入 sort_field='id; DROP TABLE users--' 实现 SQL 注入。参数化查询无法保护 ORDER BY 中的列名，所以必须用白名单",
+  "known_pitfalls": [
+    "ORDER BY 和 GROUP BY 中的列名不能用参数化占位符，容易被遗漏——这是 SQL 注入的高发区",
+    "ORM 的 raw() / text() 方法同样存在注入风险，使用 ORM 不代表自动安全",
+    "LIKE 查询中的 % 和 _ 是通配符，用户输入需要额外转义，否则可实现模糊匹配绕过"
+  ],
+  "validation_evidence": "渗透测试验证：传入恶意 sort_field 参数，服务返回 400 Bad Request（字段不在白名单中），不再执行非法 SQL",
+  "issue_type": "security_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["sql-injection", "database", "input-validation"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

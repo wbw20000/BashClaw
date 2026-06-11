@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-024",
+  "decision_title": "SQLAlchemy 异步 session 必须使用 async_scoped_session 并正确管理生命周期",
+  "task_summary": "修复 FastAPI + SQLAlchemy async 中 session 跨请求泄漏和隐式 I/O 导致的 greenlet_spawn 错误",
+  "applicable_scope": "SQLAlchemy 2.0 async sessions, FastAPI dependency injection, async database operations",
+  "non_applicable_scope": "SQLAlchemy 同步 session, Django ORM, 使用 databases 库的场景",
+  "final_decision": "使用 async_scoped_session + AsyncSession，每个请求通过 FastAPI 的 Depends 获取独立 session。请求结束后显式 await session.close()。所有关联对象访问必须用 selectinload/joinedload 预加载，禁止依赖 lazy loading",
+  "why": "SQLAlchemy 的 lazy loading 在同步模式下透明触发 SQL 查询，但在 async 模式下会抛出 MissingGreenlet: greenlet_spawn has not been called 错误。因为 async session 不允许隐式的同步 I/O。此外 session 对象在请求间共享导致一个请求的 rollback 影响了另一个请求的事务",
+  "known_pitfalls": [
+    "relationship() 的默认 lazy='select' 在 async 模式下必须改为 lazy='selectin' 或在查询时显式 .options(selectinload(Model.relation))",
+    "async session 的 expire_on_commit=True（默认值）会导致 commit 后访问对象属性触发隐式查询——在 async 模式下应设为 False 或在 commit 前获取所有需要的属性",
+    "async_scoped_session 的 scopefunc 必须正确绑定到请求上下文（如 contextvars），否则并发请求会共享 session"
+  ],
+  "validation_evidence": "修复后并发 100 个请求的压测：0 个 greenlet_spawn 错误（之前约 15%），session 泄漏检测显示每个请求结束后 session 正确关闭",
+  "issue_type": "runtime_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["python", "sqlalchemy", "async", "database", "session-management"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

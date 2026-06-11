@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-017",
+  "decision_title": "复杂联合类型必须使用判别字段实现类型窄化",
+  "task_summary": "重构 API 响应类型定义，从宽泛的联合类型改为带 type/kind 判别字段的联合类型",
+  "applicable_scope": "TypeScript union types, API response typing, state machine types, event handling",
+  "non_applicable_scope": "简单的基础类型联合（如 string | number）, 仅在一处使用的临时类型",
+  "final_decision": "所有包含 2 个以上成员的对象联合类型必须包含一个字面量类型的判别字段（通常命名为 type 或 kind）。使用 switch-case 对判别字段做穷尽检查（exhaustive check），并在 default 分支加 never 类型断言",
+  "why": "API 返回 SuccessResponse | ErrorResponse | PaginatedResponse 联合类型。开发者用 'data' in response 做类型守卫，但 ErrorResponse 也有 data 字段（错误详情）。运行时访问了 ErrorResponse.data.items（undefined）导致页面白屏。判别联合类型可以在编译期防止这类错误",
+  "known_pitfalls": [
+    "判别字段的值必须是字面量类型（'success' | 'error'），不能是 string——否则 TypeScript 无法窄化",
+    "switch-case 穷尽检查需要在 default 中加 const _exhaustive: never = value，新增联合成员时编译器会强制处理",
+    "从后端 JSON 反序列化的数据没有 TypeScript 类型保证，判别字段的值需要在运行时用 zod/io-ts 校验"
+  ],
+  "validation_evidence": "重构后 TypeScript 编译器在 3 处代码中报错：未处理新增的 PaginatedResponse 类型分支。这些地方之前运行时会出现 undefined 访问",
+  "issue_type": "logic_bug",
+  "review_or_human_required": false,
+  "risk_tags": ["typescript", "type-safety", "union-types", "api"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}

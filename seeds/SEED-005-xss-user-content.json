@@ -1,0 +1,22 @@
+{
+  "kb_id": "SEED-005",
+  "decision_title": "用户生成内容必须在输出时进行 HTML 转义",
+  "task_summary": "修复评论、个人简介等用户输入内容的 XSS 漏洞，在渲染层统一添加转义处理",
+  "applicable_scope": "user-generated content rendering, comment systems, profile fields, rich text display",
+  "non_applicable_scope": "后端 API JSON 响应（不包含 HTML 渲染）, 管理员发布的受信任内容",
+  "final_decision": "采用输出时转义策略：所有用户内容在 HTML 渲染时必须经过上下文相关的转义。HTML 正文用 HTML entity 转义，属性值用属性转义，JavaScript 上下文用 JS 转义。禁止在输入时过滤（input sanitization）作为唯一防线",
+  "why": "之前在输入时做了 strip_tags 过滤，但攻击者通过事件属性（如 onerror）和 SVG 标签绕过了过滤。输入时过滤容易被绕过，且会破坏用户的合法输入内容。输出时转义是 XSS 防御的正确位置，因为此时才知道内容的渲染上下文",
+  "known_pitfalls": [
+    "React 的 dangerouslySetInnerHTML 和 Vue 的 v-html 会绕过框架的自动转义——需要在代码审查中重点检查",
+    "Markdown 渲染后的 HTML 仍可能包含恶意内容，需要在 Markdown 转 HTML 后再过一遍 DOMPurify 等白名单过滤器",
+    "URL 类型的用户输入（如头像链接、个人主页）需要额外校验协议，防止 javascript: 伪协议注入"
+  ],
+  "validation_evidence": "自动化安全扫描通过：注入 <img src=x onerror=alert(1)> 和 <svg/onload=alert(1)> 等 payload，页面渲染为纯文本而非执行脚本",
+  "issue_type": "security_risk",
+  "review_or_human_required": false,
+  "risk_tags": ["xss", "frontend-security", "user-content"],
+  "changeType": "logic_change",
+  "linked_issue": "",
+  "linked_pr": "",
+  "timestamp": "2026-03-27T00:00:00Z"
+}
